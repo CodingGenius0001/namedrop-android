@@ -1,0 +1,12 @@
+package com.keshav.daptap.tap
+
+import android.os.SystemClock
+
+/** Shared flag between the tap engine and the accessibility helper: "the next Quick Share sheet is ours". */
+object AutoPick {
+    @Volatile private var armedUntil = 0L
+
+    fun arm(windowMs: Long = 25_000) { armedUntil = SystemClock.elapsedRealtime() + windowMs }
+    fun disarm() { armedUntil = 0 }
+    val armed: Boolean get() = SystemClock.elapsedRealtime() < armedUntil
+}

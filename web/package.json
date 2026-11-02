@@ -1,0 +1,12 @@
+{
+  "name": "daptap-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/unit.test.mjs",
+    "e2e": "node test/e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.48.2"
+  }
+}

@@ -1,0 +1,45 @@
+name: Web card (GitHub Pages)
+
+# Publishes web/ to https://codinggenius0001.github.io/namedrop-android/
+# The card page (c/) is what an iPhone opens from the NFC banner when the web-card fallback is on.
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Web unit tests
+        working-directory: web
+        run: node --test test/unit.test.mjs
+      - name: Stage site
+        run: |
+          mkdir -p site
+          cp -r web/index.html web/icon.svg web/c site/
+          touch site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

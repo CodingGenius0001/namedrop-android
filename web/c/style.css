@@ -1,0 +1,145 @@
+@property --r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+
+:root {
+  --ground: #1F3BD1;
+  --accent: #FF5A36;
+  --ink: #fff;
+  --ink-soft: rgba(255, 255, 255, .78);
+  --line: rgba(255, 255, 255, .10);
+  --raised: color-mix(in srgb, var(--ground) 80%, #000);
+  --pitch: 24px;
+  --gutter: var(--pitch);
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; }
+
+body {
+  min-height: 100dvh;
+  background-color: var(--ground);
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: var(--pitch) var(--pitch);
+  color: var(--ink);
+  font: 400 17px/1.4 Archivo, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection { background: var(--ink); color: var(--ground); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+/* The tap: a ring of lit cells running down from the top edge, where the Android phone touched. */
+.ripple {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Crect x='1.2' y='1.2' width='7.6' height='7.6' rx='2' fill='white' fill-opacity='.5'/%3E%3C/svg%3E");
+  background-size: var(--pitch) var(--pitch);
+  -webkit-mask: radial-gradient(circle at 50% 0, transparent calc(var(--r) - 90px), #000 var(--r), transparent calc(var(--r) + 40px));
+  mask: radial-gradient(circle at 50% 0, transparent calc(var(--r) - 90px), #000 var(--r), transparent calc(var(--r) + 40px));
+  animation: ripple 1.3s cubic-bezier(.25, .7, .3, 1) both;
+}
+@keyframes ripple { from { --r: 0px; opacity: 1; } 85% { opacity: 1; } to { --r: 140vh; opacity: 0; } }
+
+.bar {
+  position: relative; z-index: 1;
+  height: calc(var(--pitch) * 2.5);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 0 var(--gutter);
+}
+.brand { font-weight: 800; font-size: 20px; letter-spacing: -.01em; }
+.from { color: var(--ink-soft); font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.poster {
+  position: relative; z-index: 1;
+  padding: var(--pitch) var(--gutter) calc(var(--pitch) * 9 + env(safe-area-inset-bottom));
+  max-width: 720px;
+}
+
+.photo {
+  width: calc(var(--pitch) * var(--photo-cells, 4)); aspect-ratio: 1;
+  border-radius: 14%; overflow: hidden; background: var(--raised);
+  margin-bottom: var(--pitch);
+}
+.photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.name { display: block; width: 100%; height: auto; overflow: visible; }
+.name rect { fill: var(--ink); }
+.name .cell {
+  transform-box: fill-box; transform-origin: center;
+  animation: build .42s cubic-bezier(.2, .8, .2, 1) both;
+  animation-delay: calc(var(--d) * 700ms + 380ms);
+}
+@keyframes build { from { transform: scale(0); opacity: 0; } }
+
+.name-text, .headline {
+  font-size: clamp(40px, 13vw, 72px); line-height: 1; font-weight: 800; letter-spacing: -.02em;
+  margin: 0; overflow-wrap: anywhere;
+}
+.headline { font-size: clamp(30px, 8vw, 44px); margin-top: var(--pitch); text-wrap: balance; }
+
+.rest { margin: var(--pitch) 0 0; font-size: 30px; line-height: 1.12; font-weight: 800; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.rest:empty { display: none; }
+.role { margin: 6px 0 0; color: var(--ink-soft); font-size: 17px; line-height: 1.35; max-width: 40ch; }
+.role:empty { display: none; }
+
+.details { list-style: none; margin: 22px 0 0; padding: 0; }
+.details li { min-height: 44px; display: flex; align-items: center; gap: 14px; font-size: 17px; }
+.details svg { width: 20px; height: 20px; flex: none; stroke: var(--ink-soft); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.details a { text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details a:active { opacity: .7; }
+
+.actions {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: grid; gap: 10px;
+  padding: 12px var(--gutter) calc(16px + env(safe-area-inset-bottom));
+  background: var(--ground);
+  box-shadow: 0 -10px 24px -12px rgba(0, 0, 0, .35);
+}
+.status { margin: 0; min-height: 0; font-size: 15px; color: var(--ink); display: flex; align-items: center; gap: 10px; }
+.status:empty { display: none; }
+.status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+
+.btn {
+  appearance: none; border: 0; border-radius: 999px; min-height: 54px; padding: 0 22px;
+  font: 600 17px/1 Archivo, -apple-system, system-ui, sans-serif; cursor: pointer;
+  transition: transform .12s ease-out, opacity .2s ease-out;
+}
+.btn:active { transform: scale(.98); }
+.btn[disabled] { opacity: .55; cursor: default; }
+.primary { background: var(--ink); color: var(--ground); }
+.secondary { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink-soft); }
+.ghost { background: transparent; color: var(--ink); }
+
+dialog {
+  border: 0; padding: 0; margin: auto auto 0; width: 100%; max-width: 640px;
+  background: var(--raised); color: var(--ink);
+  border-radius: 24px 24px 0 0; max-height: 92dvh;
+}
+dialog::backdrop { background: rgba(0, 0, 0, .45); }
+dialog[open] { animation: sheet .32s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes sheet { from { transform: translateY(40px); opacity: 0; } }
+form { padding: 22px var(--gutter) calc(18px + env(safe-area-inset-bottom)); display: grid; gap: 12px; }
+form h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+.hint { margin: 0 0 4px; color: var(--ink-soft); font-size: 15px; }
+label { display: grid; gap: 6px; font-size: 14px; font-weight: 500; color: var(--ink-soft); }
+input {
+  font: 400 17px/1.2 Archivo, -apple-system, system-ui, sans-serif; color: #111;
+  background: #fff; border: 2px solid transparent; border-radius: 12px; min-height: 48px; padding: 0 14px;
+  caret-color: var(--ground);
+}
+input:focus { outline: none; border-color: var(--accent); }
+input::placeholder { color: #6b6b75; }
+.error { margin: 0; color: #fff; font-weight: 600; font-size: 15px; }
+.error:empty { display: none; }
+.sheet-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-top: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ripple { display: none; }
+  .name .cell, dialog[open] { animation: none; }
+  .btn { transition: none; }
+}

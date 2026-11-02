@@ -1,0 +1,101 @@
+name: Build & test
+
+# Every push / PR: web tests, unit tests (including the Kotlin <-> web cross-check), signed release APK.
+# Pushes to main also publish a GitHub Release. The newest APK is always at:
+#   https://github.com/CodingGenius0001/namedrop-android/releases/latest/download/DapTap.apk
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Web unit tests
+        working-directory: web
+        run: node --test test/unit.test.mjs
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK licenses
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BIN="$SDK_ROOT/cmdline-tools/latest/bin"
+          [ -x "$BIN/sdkmanager" ] || BIN="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 2 -path '*/bin' | head -n 1)"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          yes | "$BIN/sdkmanager" --licenses > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Restore signing key
+        env:
+          DAPTAP_KEYSTORE_BASE64: ${{ secrets.DAPTAP_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$DAPTAP_KEYSTORE_BASE64" ]; then
+            mkdir -p app/keystore
+            echo "$DAPTAP_KEYSTORE_BASE64" | base64 -d > app/keystore/daptap.jks
+            echo "Signing with the DapTap key (updates install over older builds)."
+          else
+            echo "::warning::DAPTAP_KEYSTORE_BASE64 not set; APK is signed with a throwaway debug key."
+          fi
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Build release APK
+        env:
+          DAPTAP_KEYSTORE_PASSWORD: ${{ secrets.DAPTAP_KEYSTORE_PASSWORD }}
+          DAPTAP_KEY_ALIAS: ${{ secrets.DAPTAP_KEY_ALIAS }}
+          DAPTAP_KEY_PASSWORD: ${{ secrets.DAPTAP_KEY_PASSWORD }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk out/DapTap.apk
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: DapTap-apk
+          path: out/DapTap.apk
+          if-no-files-found: error
+
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: DapTap 1.0.${{ github.run_number }}
+          body: |
+            **Install on your phone:** download `DapTap.apk` below and open it. Android will ask you to allow installs from your browser or Files app.
+
+            Built from ${{ github.sha }}.
+          files: out/DapTap.apk
+          make_latest: "true"

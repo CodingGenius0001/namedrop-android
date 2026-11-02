@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">DapTap</string>
+    <string name="hce_description">DapTap contact card</string>
+    <string name="hce_aid_group">DapTap shares your contact card when phones touch</string>
+    <string name="a11y_label">DapTap: pick the iPhone in Quick Share</string>
+    <string name="a11y_description">Right after you tap an iPhone, DapTap taps that iPhone in Quick Share\'s device list for you, but only when it\'s the only iPhone shown. It reacts to nothing else and reads no other apps.</string>
+</resources>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F3BD1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>DapTap card</title>
+<link rel="icon" href="../icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div class="ripple" aria-hidden="true"></div>
+<header class="bar">
+  <span class="brand">DapTap</span>
+  <span class="from" id="from"></span>
+</header>
+
+<main id="card" class="poster" hidden>
+  <div class="photo" id="photo" hidden><img id="photo-img" alt=""></div>
+  <svg class="name" id="name" role="img"></svg>
+  <h1 class="name-text" id="name-text" hidden></h1>
+  <p class="rest" id="rest"></p>
+  <p class="role" id="role"></p>
+  <ul class="details" id="details"></ul>
+</main>
+
+<section id="broken" class="poster notice" hidden>
+  <svg class="name" id="broken-name" aria-hidden="true"></svg>
+  <h1 class="headline">This card didn't come through</h1>
+  <p class="role">The link is missing part of the card. Ask them to tap their phone to yours again.</p>
+</section>
+
+<footer class="actions" id="actions" hidden>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+  <button class="btn primary" id="save" type="button">Save contact</button>
+  <button class="btn secondary" id="back" type="button">Send mine back</button>
+</footer>
+
+<dialog id="sheet" aria-labelledby="sheet-title">
+  <form id="form" method="dialog" novalidate>
+    <h2 id="sheet-title">Send yours to <span id="sheet-name">them</span></h2>
+    <p class="hint">Safari can fill this from your own contact card. It goes straight to their phone, encrypted.</p>
+    <label>Name<input name="name" autocomplete="name" required maxlength="80" enterkeyhint="next"></label>
+    <label>Phone<input name="phone" type="tel" autocomplete="tel" maxlength="40" enterkeyhint="next"></label>
+    <label>Email<input name="email" type="email" autocomplete="email" maxlength="120" enterkeyhint="next"></label>
+    <label>Company or school<input name="company" autocomplete="organization" maxlength="80" enterkeyhint="next"></label>
+    <label>Title<input name="title" autocomplete="organization-title" maxlength="80" enterkeyhint="next"></label>
+    <label>Instagram<input name="instagram" autocomplete="off" autocapitalize="none" maxlength="60" placeholder="@handle" enterkeyhint="send"></label>
+    <p class="error" id="form-error" role="alert"></p>
+    <div class="sheet-actions">
+      <button class="btn ghost" type="button" id="cancel">Cancel</button>
+      <button class="btn primary" type="submit" id="send">Send</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
