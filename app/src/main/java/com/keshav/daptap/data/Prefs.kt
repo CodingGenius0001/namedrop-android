@@ -29,6 +29,8 @@ data class Settings(
     val onboarded: Boolean = false,
     /** The first-run "Display over other apps" prompt has been answered (either way). */
     val overlayAsked: Boolean = false,
+    /** Uploads the encrypted tap log after each tap so it can be read remotely while testing. */
+    val testingMode: Boolean = false,
 )
 
 /**

@@ -17,6 +17,7 @@ class SimulatedReader : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as DapTapApp
         if (intent.hasExtra("web")) app.prefs.updateSettings { it.copy(webFallback = intent.getBooleanExtra("web", false)) }
+        if (intent.hasExtra("testing")) app.prefs.updateSettings { it.copy(testingMode = intent.getBooleanExtra("testing", false)) }
         if (intent.hasExtra("airdrop")) app.prefs.updateSettings { it.copy(airDropOnTap = intent.getBooleanExtra("airdrop", true)) }
         val engine = app.engine
         if (intent.getBooleanExtra("namedrop", false)) { simulateNameDrop(context, engine); return }

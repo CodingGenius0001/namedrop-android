@@ -356,6 +356,11 @@ fun DapTapRoot(app: DapTapApp) {
                                             ?.setPrimaryClip(ClipData.newPlainText("DapTap log", log.joinToString("\n")))
                                     },
                                     clearLog = { app.engine.clearLog() },
+                                    testCode = app.logUploader.code,
+                                    copyTestCode = {
+                                        context.getSystemService(ClipboardManager::class.java)
+                                            ?.setPrimaryClip(ClipData.newPlainText("DapTap testing code", app.logUploader.code))
+                                    },
                                     openSource = { context.startActivitySafe(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/CodingGenius0001/namedrop-android"))) },
                                 ),
                             )

@@ -54,6 +54,9 @@ class SettingsActions(
     val requestNotifications: () -> Unit,
     val copyLog: () -> Unit,
     val clearLog: () -> Unit,
+    /** The testing-mode code (topic + key) and a way to copy it. */
+    val testCode: String,
+    val copyTestCode: () -> Unit,
     val openSource: () -> Unit,
     val updateStatus: String,
     val updateAction: Pair<String, () -> Unit>?,
@@ -127,6 +130,19 @@ fun SettingsScreen(
             Toggle("Observe Apple frames while open",
                 "Experimental. Puts NFC in observe mode between polls so the iPhone's reply frames show up in the log. Turn off if taps stop working.",
                 settings.observeFrames, enabled = status.observeModeSupported == true) { v -> actions.update { it.copy(observeFrames = v) } }
+            Toggle("Testing mode",
+                "Sends the tap log, encrypted, after each tap, so whoever has the code below can read it remotely. Messages expire after about 12 hours.",
+                settings.testingMode) { v -> actions.update { it.copy(testingMode = v) } }
+            if (settings.testingMode) {
+                ListItem(
+                    headlineContent = { Text("Testing code") },
+                    supportingContent = {
+                        SelectionContainer { Text(actions.testCode, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+                    },
+                    trailingContent = { TextButton(onClick = actions.copyTestCode) { Text("Copy") } },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.background),
+                )
+            }
             Surface(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
