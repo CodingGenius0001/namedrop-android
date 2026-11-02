@@ -2,7 +2,7 @@
 
 **NameDrop for Android.** Hold your phone to someone else's and your contact card lands on theirs, iPhones included, with no app on their side.
 
-[Download the latest APK](https://github.com/CodingGenius0001/namedrop-android/releases/latest/download/DapTap.apk) · [Web card](https://codinggenius0001.github.io/namedrop-android/)
+[Download the latest APK](https://codinggenius0001.github.io/namedrop-android/DapTap.apk) · [Web card](https://codinggenius0001.github.io/namedrop-android/)
 
 ## What happens when you tap
 
@@ -27,7 +27,7 @@ NameDrop's *contact poster* exchange, the full-screen poster with *Receive Only 
 
 ## Install
 
-1. On your phone, open the [latest APK](https://github.com/CodingGenius0001/namedrop-android/releases/latest/download/DapTap.apk) and install it (allow installs from your browser when asked).
+1. On your phone, open the [latest APK](https://codinggenius0001.github.io/namedrop-android/DapTap.apk) and install it (allow installs from your browser when asked).
 2. Make your card. Turn on NFC.
 3. Optional, under **Settings**:
    - *Display over other apps*: the tap animation plays even when DapTap is closed.

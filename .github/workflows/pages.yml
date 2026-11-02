@@ -2,11 +2,18 @@ name: Web card (GitHub Pages)
 
 # Publishes web/ to https://codinggenius0001.github.io/namedrop-android/
 # The card page (c/) is what an iPhone opens from the NFC banner when the web-card fallback is on.
+# It also mirrors the latest release APK as /namedrop-android/DapTap.apk: one direct download from the
+# same host as the page, with no redirect to GitHub's signed release-asset domain (which ad-blocking DNS,
+# VPNs and some campus networks block, so phones reported "Download failed").
 
 on:
   push:
     branches: [main]
     paths: ["web/**", ".github/workflows/pages.yml"]
+  workflow_run:
+    workflows: ["Build & test"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +27,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -37,6 +45,12 @@ jobs:
           mkdir -p site
           cp -r web/index.html web/icon.svg web/c site/
           touch site/.nojekyll
+      - name: Mirror the latest APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern DapTap.apk --dir site
+          test "$(stat -c %s site/DapTap.apk)" -gt 500000
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
