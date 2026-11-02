@@ -1,6 +1,7 @@
 package com.keshav.daptap.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -48,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -58,6 +60,9 @@ import com.keshav.daptap.core.ContactCard
 import com.keshav.daptap.tap.TapEngine
 
 enum class NfcState { ON, OFF, MISSING }
+
+/** Text on an accent fill (vermilion or yellow): about 6:1 on both. */
+private val LiveInk = androidx.compose.ui.graphics.Color(0xFF16161A)
 
 /** Home: your card as a poster. Bring phones together and the grid ripples, then the status says what happened. */
 @Composable
@@ -112,10 +117,13 @@ fun CardScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             StatusChip(phase, nfc, tapEnabled, onFixNfc, onEnableTap, Modifier.weight(1f))
+            // At large font sizes the label would squeeze the status out, so the button folds to its icon.
+            val roomy = LocalDensity.current.fontScale < 1.15f
             ExtendedFloatingActionButton(
                 onClick = onEdit,
+                expanded = roomy,
                 containerColor = ground.ink, contentColor = ground.color,
-                icon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                icon = { Icon(Icons.Outlined.Edit, contentDescription = if (roomy) null else "Edit card") },
                 text = { Text("Edit card", fontWeight = FontWeight.SemiBold) },
             )
         }
@@ -142,27 +150,32 @@ private fun StatusChip(
         phase is TapEngine.Phase.Sent -> "Your card was read" to null
         else -> "Ready. Hold phones back to back" to null
     }
+    val armed = nfc == NfcState.ON && tapEnabled
+    // While a tap is live the whole chip becomes the accent: the one place the second colour appears.
+    val live = armed && phase !is TapEngine.Phase.Ready
+    val fill by animateColorAsState(if (live) ground.accent else ground.raised, tween(180), label = "fill")
+    val ink by animateColorAsState(if (live) LiveInk else ground.ink, tween(180), label = "ink")
     val pulse = rememberInfiniteTransition(label = "pulse")
     val a by pulse.animateFloat(1f, 0.25f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "a")
     Surface(
         modifier = modifier.heightIn(min = 48.dp).semantics { liveRegion = LiveRegionMode.Polite }
             .let { if (action != null) it.clickable(onClick = action) else it },
         shape = RoundedCornerShape(24.dp),
-        color = ground.raised,
-        contentColor = ground.ink,
+        color = fill,
+        contentColor = ink,
     ) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             when {
-                phase is TapEngine.Phase.Sent && nfc == NfcState.ON && tapEnabled ->
-                    Icon(Icons.Outlined.Check, contentDescription = null, tint = ground.accent, modifier = Modifier.size(16.dp))
+                phase is TapEngine.Phase.Sent && armed ->
+                    Icon(Icons.Outlined.Check, contentDescription = null, tint = ink, modifier = Modifier.size(16.dp))
                 else -> StateDot(
-                    if (nfc == NfcState.ON && tapEnabled) ground.accent else ground.inkSoft,
+                    when { live -> ink; armed -> ground.accent; else -> ground.inkSoft },
                     Modifier.alpha(if (phase is TapEngine.Phase.Touching) a else 1f),
                 )
             }
             Spacer(Modifier.width(10.dp))
             AnimatedContent(text, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) }, label = "status") {
-                Text(it, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                Text(it, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 2)
             }
         }
     }

@@ -118,13 +118,18 @@ fun EditCardScreen(
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(ground.color)
             ) {
-                ConstructionGrid(10.dp, ground.line, Modifier.matchParentSize())
-                Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PhotoTile(photo, draft, ground, 60.dp, Modifier.clickable(onClick = onPickPhoto))
-                    Spacer(Modifier.width(16.dp))
+                // Grid, padding, photo and letters all step in the same cell so the preview registers like the poster.
+                val cell = 8.dp
+                ConstructionGrid(cell, ground.line, Modifier.matchParentSize())
+                Row(Modifier.padding(cell * 2), verticalAlignment = Alignment.Top) {
+                    PhotoTile(photo, draft, ground, cell * 7, Modifier.clickable(
+                        onClickLabel = if (photo == null) "Add photo" else "Change photo", role = Role.Button,
+                        onClick = onPickPhoto,
+                    ))
+                    Spacer(Modifier.width(cell * 2))
                     Column(Modifier.weight(1f)) {
-                        CellName(draft.firstName.ifBlank { "YOU" }, ground.ink, maxCell = 8.dp, origin = Offset(0f, 0.5f))
-                        Spacer(Modifier.height(8.dp))
+                        CellName(draft.firstName.ifBlank { "YOU" }, ground.ink, maxCell = cell, origin = Offset(0f, 0.5f))
+                        Spacer(Modifier.height(cell))
                         Text(
                             draft.restOfName().ifBlank { draft.roleLine.ifBlank { "Your name, as they'll see it" } },
                             color = ground.inkSoft, fontSize = 14.sp, maxLines = 1,
@@ -145,7 +150,11 @@ fun EditCardScreen(
                     val sel = i == label
                     Box(
                         Modifier.size(48.dp).clip(CircleShape).background(g.color)
-                            .border(if (sel) 3.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                            .border(
+                                if (sel) 3.dp else 1.dp,
+                                if (sel) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
+                                CircleShape,
+                            )
                             .clickable(role = Role.RadioButton) { label = i }
                             .semantics { contentDescription = g.name; selected = sel },
                         contentAlignment = Alignment.Center,

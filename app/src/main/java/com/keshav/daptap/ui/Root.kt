@@ -183,7 +183,8 @@ fun DapTapRoot(app: DapTapApp) {
     DapTapTheme(Grounds.of(card.label)) {
         val inc = incoming
         val viewing = viewingId?.let { id -> people.firstOrNull { it.id == id } }
-        val drenched = inc != null || (!editing && (viewing != null || tab == Tab.CARD))
+        // Every screen but the editor starts on a ground, so the status bar icons stay light.
+        val drenched = inc != null || !editing
         SystemBarIcons(lightIcons = drenched || androidx.compose.foundation.isSystemInDarkTheme())
         Box(Modifier.fillMaxSize()) {
             AnimatedContent(

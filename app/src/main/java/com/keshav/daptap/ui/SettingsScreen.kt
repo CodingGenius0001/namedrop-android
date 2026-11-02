@@ -67,7 +67,7 @@ fun SettingsScreen(
     actions: SettingsActions,
 ) {
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Settings") }) },
+        topBar = { GroundTopBar("Settings") },
         contentWindowInsets = WindowInsets(0),
         modifier = Modifier.padding(bottom = contentPadding.calculateBottomPadding()),
     ) { padding ->

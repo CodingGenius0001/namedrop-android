@@ -3,13 +3,15 @@ package com.keshav.daptap.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.keshav.daptap.core.ContactCard
+import kotlinx.coroutines.launch
 
 /** What can be done with a card on screen. */
 data class PersonActions(
@@ -66,8 +69,15 @@ data class PersonActions(
 fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate: Boolean, actions: PersonActions) {
     val ground = Grounds.of(card.label)
     val reduce = reducedMotion(LocalContext.current)
-    val build = remember(card) { Animatable(if (animate && !reduce) 0f else 1f) }
+    val motion = animate && !reduce
+    val build = remember(card) { Animatable(if (motion) 0f else 1f) }
+    // The tap ripples out from where the phones met, and their name assembles behind it.
+    val wave = remember(card) { Animatable(if (motion) 0f else -1f) }
     LaunchedEffect(card) {
+        if (wave.value >= 0f) launch {
+            wave.animateTo(1f, tween(1100, easing = LinearEasing))
+            wave.snapTo(-1f)
+        }
         if (build.value < 1f) build.animateTo(1f, tween(1000, delayMillis = 120, easing = FastOutSlowInEasing))
     }
     BackHandler(onBack = actions.onClose)
@@ -75,7 +85,7 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     Box(Modifier.fillMaxSize()) {
-        Poster(card, photo, ground, topInset = top, bottomInset = bottom + 140.dp, nameProgress = build.value)
+        Poster(card, photo, ground, topInset = top, bottomInset = bottom + 140.dp, nameProgress = build.value, wave = wave.value)
 
         Row(
             Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).height(64.dp).padding(horizontal = 4.dp),
@@ -89,7 +99,7 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
         }
 
         Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(ground.color)
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = bottom + 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -104,8 +114,14 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
             ) {
                 when {
                     actions.saving -> CircularProgressIndicator(Modifier.size(20.dp), color = ground.color, strokeWidth = 2.dp)
-                    actions.saved -> { Icon(Icons.Outlined.Check, null); Text("  Saved to Contacts", fontSize = 16.sp) }
-                    else -> { Icon(Icons.Outlined.PersonAddAlt, null); Text("  Save ${card.firstName.ifBlank { "contact" }}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
+                    actions.saved -> {
+                        Icon(Icons.Outlined.Check, null); Spacer(Modifier.width(8.dp))
+                        Text("Saved to Contacts", fontSize = 16.sp)
+                    }
+                    else -> {
+                        Icon(Icons.Outlined.PersonAddAlt, null); Spacer(Modifier.width(8.dp))
+                        Text("Save ${card.firstName.ifBlank { "contact" }}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
             if (actions.onShareBack != null || actions.sharedBack) {

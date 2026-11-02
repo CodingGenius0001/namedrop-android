@@ -39,7 +39,8 @@ class History(private val context: Context) {
     /** Adds a person. A repeat of the same card within 2 minutes (the same tap read twice) is merged, not duplicated. */
     fun add(card: ContactCard, photo: ByteArray?, via: String): Person = synchronized(lock) {
         val now = System.currentTimeMillis()
-        val dup = _people.value.firstOrNull { it.card == card && now - it.at < 120_000 }
+        // Same person resending within two minutes (colour aside: web replies pick one at random).
+        val dup = _people.value.firstOrNull { it.card.copy(label = card.label) == card && now - it.at < 120_000 }
         val photoName = photo?.let { bytes ->
             val name = (dup?.id ?: UUID.randomUUID().toString()) + ".jpg"
             File(Photos.peopleDir(context), name).writeBytes(bytes)

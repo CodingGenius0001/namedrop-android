@@ -17,7 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 @Immutable
 data class Ground(val name: String, val color: Color, val accent: Color) {
     val ink: Color get() = Color.White
-    val inkSoft: Color get() = Color.White.copy(alpha = 0.76f)
+    val inkSoft: Color get() = Color.White.copy(alpha = 0.90f)
     val line: Color get() = Color.White.copy(alpha = 0.10f)
     val raised: Color get() = lerp(color, Color.Black, 0.18f)
 }
@@ -29,7 +29,7 @@ object Grounds {
         Ground("Emerald", Color(0xFF0B7A55), Color(0xFFFFD23F)),
         Ground("Ink", Color(0xFF161616), Color(0xFFFF5A36)),
         Ground("Rust", Color(0xFFB0460F), Color(0xFFFFD23F)),
-        Ground("Teal", Color(0xFF00707F), Color(0xFFFF5A36)),
+        Ground("Teal", Color(0xFF00707F), Color(0xFFFFD23F)),
     )
 
     fun of(index: Int) = all[index.coerceIn(0, all.lastIndex)]

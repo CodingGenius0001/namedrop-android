@@ -7,7 +7,7 @@ export const GROUNDS = [
   ['#0B7A55', '#FFD23F'],
   ['#161616', '#FF5A36'],
   ['#B0460F', '#FFD23F'],
-  ['#00707F', '#FF5A36'],
+  ['#00707F', '#FFD23F'],
 ];
 export const RELAY = 'https://ntfy.sh/';
 export const TOPIC_PREFIX = 'daptap-';
@@ -294,4 +294,8 @@ function main() {
   });
 }
 
-if (typeof document !== 'undefined' && document.getElementById('card')) main();
+if (typeof document !== 'undefined' && document.getElementById('card')) {
+  // Opening another DapTap link in the same tab only changes the fragment: start over with the new card.
+  addEventListener('hashchange', () => location.reload());
+  main();
+}

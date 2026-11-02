@@ -4,7 +4,7 @@
   --ground: #1F3BD1;
   --accent: #FF5A36;
   --ink: #fff;
-  --ink-soft: rgba(255, 255, 255, .78);
+  --ink-soft: rgba(255, 255, 255, .90);
   --line: rgba(255, 255, 255, .10);
   --raised: color-mix(in srgb, var(--ground) 80%, #000);
   --pitch: 24px;
@@ -24,6 +24,7 @@ body {
     linear-gradient(var(--line) 1px, transparent 1px),
     linear-gradient(90deg, var(--line) 1px, transparent 1px);
   background-size: var(--pitch) var(--pitch);
+  background-position: 0 env(safe-area-inset-top);
   color: var(--ink);
   font: 400 17px/1.4 Archivo, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
@@ -47,7 +48,7 @@ a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; 
 
 .bar {
   position: relative; z-index: 1;
-  height: calc(var(--pitch) * 2.5);
+  height: calc(var(--pitch) * 2);
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 0 var(--gutter);
 }

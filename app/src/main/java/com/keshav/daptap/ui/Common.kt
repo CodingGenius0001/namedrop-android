@@ -88,3 +88,21 @@ fun PhotoTile(photo: ImageBitmap?, card: ContactCard, ground: Ground, size: Dp, 
 fun StateDot(color: Color, modifier: Modifier = Modifier) {
     Box(modifier.size(8.dp).clip(CircleShape).background(color))
 }
+
+/** Title band for the utility tabs: the card's own ground and grid, so the poster's world carries over. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun GroundTopBar(title: String) {
+    val ground = LocalGround.current
+    Box(Modifier.background(ground.color)) {
+        ConstructionGrid(GROUND_BAND_PITCH, ground.line, Modifier.matchParentSize())
+        androidx.compose.material3.TopAppBar(
+            title = { Text(title, fontWeight = FontWeight.Bold, fontSize = 22.sp) },
+            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                containerColor = Color.Transparent, titleContentColor = ground.ink,
+            ),
+        )
+    }
+}
+
+private val GROUND_BAND_PITCH = 16.dp
