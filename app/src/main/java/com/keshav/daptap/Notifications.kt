@@ -16,8 +16,10 @@ import com.keshav.daptap.data.Person
 object Notifications {
     const val CHANNEL_INCOMING = "incoming"
     const val CHANNEL_TAP = "tap"
+    const val CHANNEL_UPDATES = "updates"
     private const val ID_INCOMING = 10
     private const val ID_TAP = 11
+    private const val ID_UPDATED = 12
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -26,6 +28,8 @@ object Notifications {
             .apply { description = "Someone shared their contact card with you" })
         nm.createNotificationChannel(NotificationChannel(CHANNEL_TAP, "Taps", NotificationManager.IMPORTANCE_DEFAULT)
             .apply { description = "Your card was shared by tapping phones" })
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_UPDATES, "App updates", NotificationManager.IMPORTANCE_LOW)
+            .apply { description = "DapTap finished updating itself" })
     }
 
     fun canPost(context: Context) = Build.VERSION.SDK_INT < 33 ||
@@ -66,5 +70,21 @@ object Notifications {
             .build()
         @Suppress("MissingPermission")
         NotificationManagerCompat.from(context).notify(ID_TAP, n)
+    }
+
+    /** After a self-update closed the app: say it worked, and reopen it in one tap. */
+    fun updated(context: Context, versionName: String) {
+        if (!canPost(context)) return
+        createChannels(context)
+        val n = NotificationCompat.Builder(context, CHANNEL_UPDATES)
+            .setSmallIcon(R.drawable.ic_stat_daptap)
+            .setContentTitle("DapTap updated to $versionName")
+            .setContentText("Tap to open it")
+            .setContentIntent(openApp(context))
+            .setAutoCancel(true)
+            .setTimeoutAfter(10 * 60_000)
+            .build()
+        @Suppress("MissingPermission")
+        NotificationManagerCompat.from(context).notify(ID_UPDATED, n)
     }
 }

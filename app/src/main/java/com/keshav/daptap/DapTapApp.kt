@@ -17,6 +17,7 @@ class DapTapApp : Application() {
     lateinit var prefs: Prefs; private set
     lateinit var history: History; private set
     lateinit var engine: TapEngine; private set
+    lateinit var updater: com.keshav.daptap.update.Updater; private set
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -28,6 +29,7 @@ class DapTapApp : Application() {
         history = History(this)
         engine = TapEngine(this, prefs, history, Relay(BuildConfig.RELAY_BASE), scope, AndroidFeedback(this))
         Notifications.createChannels(this)
+        updater = com.keshav.daptap.update.Updater(this, BuildConfig.WEB_BASE)
         scope.launch {
             kotlinx.coroutines.flow.combine(prefs.card, prefs.photoVersion, prefs.settings) { _, _, _ -> }.collect {
                 kotlinx.coroutines.withContext(Dispatchers.Default) { runCatching { engine.currentMessage() } }

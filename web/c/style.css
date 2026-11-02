@@ -83,6 +83,10 @@ a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; 
 }
 .headline { font-size: clamp(30px, 8vw, 44px); margin-top: var(--pitch); text-wrap: balance; }
 
+/* The surname on the same grid, in whole, half or third cells so it still registers. */
+.rest-cells { width: auto; margin-top: var(--pitch); }
+.rest-cells .cell { animation-delay: calc(var(--d) * 700ms + 560ms); }
+.rest-cells:not([hidden]) ~ .role { margin-top: var(--pitch); }
 .rest { margin: var(--pitch) 0 0; font-size: 30px; line-height: 1.12; font-weight: 800; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .rest:empty { display: none; }
 .role { margin: 6px 0 0; color: var(--ink-soft); font-size: 17px; line-height: 1.35; max-width: 40ch; }

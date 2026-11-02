@@ -51,6 +51,10 @@ jobs:
         run: |
           gh release download --repo "$GITHUB_REPOSITORY" --pattern DapTap.apk --dir site
           test "$(stat -c %s site/DapTap.apk)" -gt 500000
+          # The in-app updater's manifest. Releases before 1.0.6 don't have one; the app then just finds nothing.
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern version.json --dir site; then
+            test "$(jq -r .sha256 site/version.json)" = "$(sha256sum site/DapTap.apk | cut -d' ' -f1)"
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -50,8 +50,12 @@ class SimulatedReader : BroadcastReceiver() {
         }
         engine.onDeactivated()
         val records = Ndef.decode(body.toByteArray()).orEmpty()
-        val first = records.firstOrNull()?.let { Ndef.decodeUri(it) ?: "external:" + it.typeString + " " + String(it.payload).take(40) + "…" }
+        val first = records.firstOrNull()?.let {
+            Ndef.decodeUri(it) ?: ((if (it.tnf == Ndef.TNF_MIME) "mime:" else "external:") + it.typeString + " " + String(it.payload).take(40) + "…")
+        }
         File(context.cacheDir, "simulated-read.txt").writeText(first ?: "nothing")
         Log.i("DapTapSim", "read ${body.size()} bytes, first record: $first")
+        // The vCard record exactly as it went over the air, so it can be checked against a Contacts app.
+        records.firstOrNull { it.tnf == Ndef.TNF_MIME }?.let { File(context.cacheDir, "simulated-vcard.vcf").writeBytes(it.payload) }
     }
 }

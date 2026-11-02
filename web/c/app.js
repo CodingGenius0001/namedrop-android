@@ -178,6 +178,17 @@ function fitPitch(word) {
   return Math.max(6, Math.min(30, width / (cols + 2)));
 }
 
+/** Surname cell: the poster pitch divided by the smallest whole number that fits it on one line. */
+function sizeRest(svg, word) {
+  const box = svg.parentElement;
+  const cs = getComputedStyle(box);
+  const avail = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const pitch = parseFloat(document.documentElement.style.getPropertyValue('--pitch')) || 24;
+  const cols = layout(word).columns;
+  const k = Math.max(1, Math.ceil((cols * pitch) / Math.max(avail, 1)));
+  svg.style.width = `${(cols * pitch) / k}px`;
+}
+
 function setPitch(word) {
   const p = fitPitch(word);
   const root = document.documentElement.style;
@@ -230,13 +241,18 @@ function main() {
   const rest = card.name.includes(' ') ? card.name.slice(card.name.indexOf(' ') + 1).trim() : '';
   document.title = `${card.name || 'Contact'} · DapTap`;
   $('from').textContent = 'Card from ' + first;
+  const restCells = rest !== '' && canRender(rest);
+  const fit = () => { setPitch(first); if (restCells) sizeRest($('rest-cells'), rest); };
   setPitch(first);
-  addEventListener('resize', () => setPitch(first), { passive: true });
+  addEventListener('resize', fit, { passive: true });
 
   const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (canRender(first)) drawName($('name'), first, animate);
   else { $('name').hidden = true; $('name-text').hidden = false; $('name-text').textContent = first; }
-  $('rest').textContent = rest;
+  if (restCells) {
+    drawName($('rest-cells'), rest, animate);
+    $('rest-cells').hidden = false;
+  } else $('rest').textContent = rest;
   $('role').textContent = [card.title, card.company].filter(Boolean).join(' · ');
   const list = $('details');
   if (card.phone) list.append(detail('phone', card.phone, 'tel:' + card.phone.replace(/[^\d+]/g, '')));
@@ -244,6 +260,7 @@ function main() {
   if (card.instagram) list.append(detail('at', card.instagram, 'https://instagram.com/' + encodeURIComponent(card.instagram)));
   if (card.website) list.append(detail('web', card.website.replace(/^https?:\/\//, ''), normUrl(card.website)));
   $('card').hidden = false;
+  fit(); // the surname is sized against the poster's width, which only exists once it is shown
   $('actions').hidden = false;
   $('save').textContent = `Save ${first}`;
   $('sheet-name').textContent = first;

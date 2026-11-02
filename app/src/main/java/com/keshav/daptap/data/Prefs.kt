@@ -27,6 +27,8 @@ data class Settings(
     /** Play the overlay animation when a tap happens while DapTap isn't open. */
     val overlay: Boolean = true,
     val onboarded: Boolean = false,
+    /** The first-run "Display over other apps" prompt has been answered (either way). */
+    val overlayAsked: Boolean = false,
 )
 
 /**

@@ -44,6 +44,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Coming back from "Install unknown apps" continues an update; release builds also look for a newer
+        // DapTap (once per launch, then at most every six hours). Debug builds are a different app id.
+        lifecycleScope.launch {
+            app.updater.onPermissionResult()
+            if (!BuildConfig.DEBUG) app.updater.check()
+        }
         val adapter = nfc ?: return
         runCatching {
             // While DapTap is open, every tag the phone reads comes here first (no app chooser).
@@ -94,11 +100,15 @@ class MainActivity : ComponentActivity() {
     private fun readTag(intent: Intent) {
         @Suppress("DEPRECATION")
         val raw: Array<Parcelable>? = intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
-        val payload = raw?.filterIsInstance<NdefMessage>()?.firstNotNullOfOrNull { msg ->
-            Ndef.decode(msg.toByteArray())?.let { Ndef.findPayload(it) }
+        val messages = raw?.filterIsInstance<NdefMessage>()?.mapNotNull { Ndef.decode(it.toByteArray()) }.orEmpty()
+        val payload = messages.firstNotNullOfOrNull { Ndef.findPayload(it) }
+        val vcard = if (payload == null) messages.firstNotNullOfOrNull { Ndef.findVCard(it) } else null
+        when {
+            payload != null -> app.engine.receivePayload(payload, "tap")
+            // Any other phone or tag carrying a plain contact card.
+            vcard != null -> app.engine.receiveVCard(vcard.card, vcard.photo, "tap")
+            else -> app.engine.log("read a tag that isn't a contact card")
         }
-        if (payload != null) app.engine.receivePayload(payload, "tap")
-        else app.engine.log("read a tag that isn't a DapTap card")
     }
 
     private fun openUri(uri: Uri, type: String?, via: String = "airdrop") {

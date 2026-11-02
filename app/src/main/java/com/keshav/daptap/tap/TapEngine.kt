@@ -8,6 +8,7 @@ import com.keshav.daptap.core.Base64Url
 import com.keshav.daptap.core.ContactCard
 import com.keshav.daptap.core.Ndef
 import com.keshav.daptap.core.RelayMessage
+import com.keshav.daptap.core.VCard
 import com.keshav.daptap.core.WirePayload
 import com.keshav.daptap.data.History
 import com.keshav.daptap.data.Person
@@ -113,14 +114,16 @@ class TapEngine(
         val settings = prefs.settings.value
         val key = "${card.hashCode()}|${prefs.photoVersion.value}|${settings.webFallback}|${session.id}"
         cachedMessage?.takeIf { cachedKey == key }?.let { return it }
-        val photo = Photos.readMine(context)?.let { Photos.thumbnail(it, 96, NFC_PHOTO_MAX) }
+        val photo = Photos.readMine(context)?.let { Photos.thumbnail(it, NFC_PHOTO_PX, NFC_PHOTO_MAX) }
+        val lean = WirePayload.of(card, session.id, session.keyText)
         val records = buildList {
-            if (settings.webFallback) {
-                val lean = WirePayload.of(card, session.id, session.keyText)
-                add(Ndef.uriRecord(WirePayload.webUrl(BuildConfig.WEB_BASE, lean)))
-            }
-            val full = WirePayload.of(card, session.id, session.keyText, photo)
-            add(Ndef.externalRecord(Ndef.DAPTAP_EXTERNAL_TYPE, full.encode().toByteArray(Charsets.US_ASCII)))
+            // iPhones act on the first record only when it is a URL, so the web card leads when it is on.
+            if (settings.webFallback) add(Ndef.uriRecord(WirePayload.webUrl(BuildConfig.WEB_BASE, lean)))
+            // Any Android phone, DapTap or not: its Contacts app imports this vCard natively. It carries the
+            // photo, so the photo crosses the air once.
+            add(Ndef.mimeRecord(Ndef.VCARD_MIME, VCard.write(card, photo).toByteArray(Charsets.UTF_8)))
+            // A DapTap phone also gets the relay session for a reply.
+            add(Ndef.externalRecord(Ndef.DAPTAP_EXTERNAL_TYPE, lean.encode().toByteArray(Charsets.US_ASCII)))
         }
         return Ndef.encode(records).also { cachedMessage = it; cachedKey = key }
     }
@@ -129,7 +132,7 @@ class TapEngine(
     @Synchronized
     fun pushPayload(): ByteArray {
         rotateSessionIfStale()
-        val photo = Photos.readMine(context)?.let { Photos.thumbnail(it, 96, NFC_PHOTO_MAX) }
+        val photo = Photos.readMine(context)?.let { Photos.thumbnail(it, NFC_PHOTO_PX, NFC_PHOTO_MAX) }
         return WirePayload.of(prefs.card.value, session.id, session.keyText, photo).encode().toByteArray(Charsets.US_ASCII)
     }
 
@@ -372,7 +375,9 @@ class TapEngine(
         const val SESSION_MAX_AGE_MS = 10 * 60_000L
         const val SESSION_REUSE_MS = 60_000L
         const val LISTEN_MS = 15 * 60_000L
-        const val NFC_PHOTO_MAX = 2_600
+        /** The photo that rides on the tag: big enough for a contact header, small enough for a quick read. */
+        const val NFC_PHOTO_PX = 128
+        const val NFC_PHOTO_MAX = 3_600
         const val RELAY_PHOTO_MAX = 2_000
         const val LOG_MAX = 300
 

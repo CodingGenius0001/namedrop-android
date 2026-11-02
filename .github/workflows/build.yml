@@ -73,6 +73,11 @@ jobs:
           ./gradlew :app:assembleRelease --no-daemon --stacktrace
           mkdir -p out
           cp app/build/outputs/apk/release/app-release.apk out/DapTap.apk
+          # What the app's updater reads: same numbers as app/build.gradle.kts, plus the APK's checksum.
+          printf '{"versionCode":%d,"versionName":"1.0.%d","sha256":"%s","size":%d}\n' \
+            "$((1 + GITHUB_RUN_NUMBER))" "$GITHUB_RUN_NUMBER" \
+            "$(sha256sum out/DapTap.apk | cut -d' ' -f1)" "$(stat -c %s out/DapTap.apk)" > out/version.json
+          cat out/version.json
 
       - uses: actions/upload-artifact@v6
         if: always()
@@ -97,5 +102,7 @@ jobs:
             **Install on your phone:** download `DapTap.apk` below and open it. Android will ask you to allow installs from your browser or Files app.
 
             Built from ${{ github.sha }}.
-          files: out/DapTap.apk
+          files: |
+            out/DapTap.apk
+            out/version.json
           make_latest: "true"

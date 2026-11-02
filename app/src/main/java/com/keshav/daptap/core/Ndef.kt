@@ -11,6 +11,10 @@ object Ndef {
     /** External type carrying a DapTap card between Android phones. iOS ignores it, so it never pops a banner. */
     const val DAPTAP_EXTERNAL_TYPE = "keshav.com:daptap"
 
+    /** Android's Contacts app imports this record type straight off an NFC tag. */
+    const val VCARD_MIME = "text/vcard"
+    private val VCARD_MIMES = setOf("text/vcard", "text/x-vcard")
+
     data class Record(val tnf: Int, val type: ByteArray, val payload: ByteArray, val id: ByteArray = ByteArray(0)) {
         val typeString: String get() = String(type, Charsets.US_ASCII)
         override fun equals(other: Any?) = other is Record && tnf == other.tnf &&
@@ -38,6 +42,13 @@ object Ndef {
 
     fun externalRecord(type: String, payload: ByteArray) =
         Record(TNF_EXTERNAL, type.lowercase().toByteArray(Charsets.US_ASCII), payload)
+
+    fun mimeRecord(mime: String, payload: ByteArray) = Record(TNF_MIME, mime.toByteArray(Charsets.US_ASCII), payload)
+
+    /** The first vCard in a message, as a phone's Contacts app would import it. */
+    fun findVCard(records: List<Record>): VCard.Parsed? = records
+        .firstOrNull { it.tnf == TNF_MIME && it.typeString.lowercase() in VCARD_MIMES }
+        ?.let { VCard.parse(String(it.payload, Charsets.UTF_8)) }
 
     fun decodeUri(record: Record): String? {
         if (record.tnf != TNF_WELL_KNOWN || record.typeString != "U" || record.payload.isEmpty()) return null
@@ -97,11 +108,17 @@ object Ndef {
         }
     }
 
-    /** Pulls a DapTap payload out of any NDEF message: our external record first, then a web-card URL. */
+    /**
+     * Pulls a DapTap payload out of any NDEF message: our external record first, then a web-card URL.
+     * The photo travels once, in the vCard record, so it is attached from there when the payload has none.
+     */
     fun findPayload(records: List<Record>): WirePayload? {
-        records.firstOrNull { it.tnf == TNF_EXTERNAL && it.typeString.equals(DAPTAP_EXTERNAL_TYPE, true) }
-            ?.let { WirePayload.decode(String(it.payload, Charsets.US_ASCII)) }?.let { return it }
-        records.firstNotNullOfOrNull { decodeUri(it) }?.let { WirePayload.fromUrl(it) }?.let { return it }
-        return null
+        val payload = records.firstOrNull { it.tnf == TNF_EXTERNAL && it.typeString.equals(DAPTAP_EXTERNAL_TYPE, true) }
+            ?.let { WirePayload.decode(String(it.payload, Charsets.US_ASCII)) }
+            ?: records.firstNotNullOfOrNull { decodeUri(it) }?.let { WirePayload.fromUrl(it) }
+            ?: return null
+        if (payload.photo.isNotEmpty()) return payload
+        val photo = findVCard(records)?.photo ?: return payload
+        return payload.copy(photo = Base64Url.encode(photo))
     }
 }

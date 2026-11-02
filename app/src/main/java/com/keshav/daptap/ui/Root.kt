@@ -29,6 +29,10 @@ import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
+import com.keshav.daptap.update.Updater
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -171,13 +175,70 @@ fun DapTapRoot(app: DapTapApp) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) == PackageManager.PERMISSION_GRANTED) save(person, photo)
         else { pendingSave = person to photo; writeContacts.launch(Manifest.permission.WRITE_CONTACTS) }
     }
-    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumeTick++ }
+    var notificationsAnswered by remember { mutableStateOf(false) }
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        notificationsAnswered = true
+        resumeTick++
+    }
     fun requestNotifications() {
         if (Build.VERSION.SDK_INT >= 33) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         else context.openSettings(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
     }
     LaunchedEffect(settings.onboarded) {
         if (settings.onboarded && !status.notificationsAllowed && Build.VERSION.SDK_INT >= 33) requestNotifications()
+    }
+    fun openOverlaySettings() {
+        context.startActivitySafe(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName)))
+    }
+    // First use: once the card exists (and after the notification prompt), offer the tap over other apps.
+    val askOverlay = settings.onboarded && !editing && settings.overlay && !settings.overlayAsked &&
+        !status.overlayAllowed && (Build.VERSION.SDK_INT < 33 || status.notificationsAllowed || notificationsAnswered)
+    fun answerOverlay(allow: Boolean) {
+        app.prefs.updateSettings { it.copy(overlayAsked = true) }
+        if (allow) openOverlaySettings()
+    }
+
+    // ---- updates
+    val update by app.updater.state.collectAsState()
+    var offeredUpdate by rememberSaveable { mutableIntStateOf(0) }
+    fun startUpdate(release: Updater.Release) { app.scope.launch { app.updater.update(release) } }
+    fun checkForUpdate() { app.scope.launch { app.updater.check(userAsked = true) } }
+    // Keyed on the kind of state, so progress ticks don't restart it.
+    LaunchedEffect(update::class, (update as? Updater.State.Available)?.release?.versionCode) {
+        when (val u = update) {
+            is Updater.State.Available -> if (offeredUpdate != u.release.versionCode) {
+                offeredUpdate = u.release.versionCode
+                val r = snackbar.showSnackbar("DapTap ${u.release.versionName} is ready", "Update",
+                    withDismissAction = true, duration = SnackbarDuration.Indefinite)
+                if (r == SnackbarResult.ActionPerformed) startUpdate(u.release)
+            }
+            is Updater.State.Downloading -> snackbar.showSnackbar("Downloading DapTap ${u.release.versionName}…", duration = SnackbarDuration.Indefinite)
+            is Updater.State.NeedsPermission -> {
+                snackbar.showSnackbar("Allow DapTap to install its own updates, then come back.", duration = SnackbarDuration.Short)
+            }
+            is Updater.State.Failed -> if (u.release != null) {
+                val r = snackbar.showSnackbar(u.message, "Retry", duration = SnackbarDuration.Long)
+                if (r == SnackbarResult.ActionPerformed) startUpdate(u.release)
+            }
+            else -> {}
+        }
+    }
+    LaunchedEffect(update is Updater.State.NeedsPermission) {
+        if (update is Updater.State.NeedsPermission && Build.VERSION.SDK_INT >= 26) {
+            val opened = context.startActivitySafe(
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + context.packageName)))
+            if (!opened) app.updater.onPermissionResult()
+        }
+    }
+    val updateRow: Pair<String, Pair<String, () -> Unit>?> = when (val u = update) {
+        Updater.State.Idle -> "Checks when you open DapTap" to ("Check now" to ::checkForUpdate)
+        Updater.State.Checking -> "Checking…" to null
+        Updater.State.UpToDate -> "You have the newest build" to ("Check now" to ::checkForUpdate)
+        is Updater.State.Available -> "DapTap ${u.release.versionName} is ready" to ("Update" to { startUpdate(u.release) })
+        is Updater.State.Downloading -> "Downloading ${u.release.versionName}… ${(u.fraction * 100).toInt()}%" to null
+        is Updater.State.NeedsPermission -> "Allow DapTap to install updates" to ("Allow" to { startUpdate(u.release) })
+        is Updater.State.Installing -> "Installing ${u.release.versionName}…" to null
+        is Updater.State.Failed -> u.message to ("Try again" to { u.release?.let(::startUpdate) ?: checkForUpdate() })
     }
 
     DapTapTheme(Grounds.of(card.label)) {
@@ -267,6 +328,7 @@ fun DapTapRoot(app: DapTapApp) {
                                 },
                                 onFixNfc = { context.openSettings(Settings.ACTION_NFC_SETTINGS) },
                                 onEnableTap = { app.prefs.updateSettings { it.copy(tapEnabled = true) } },
+                                onAddPhoto = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             )
                         },
                         people = { padding ->
@@ -278,10 +340,9 @@ fun DapTapRoot(app: DapTapApp) {
                                 SettingsActions(
                                     update = { app.prefs.updateSettings(it) },
                                     openNfc = { context.openSettings(Settings.ACTION_NFC_SETTINGS) },
-                                    openOverlay = {
-                                        context.startActivitySafe(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:" + context.packageName)))
-                                    },
+                                    openOverlay = ::openOverlaySettings,
+                                    updateStatus = updateRow.first,
+                                    updateAction = updateRow.second,
                                     openAccessibility = { context.openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS) },
                                     requestNotifications = ::requestNotifications,
                                     copyLog = {
@@ -297,6 +358,18 @@ fun DapTapRoot(app: DapTapApp) {
                 }
             }
             SnackbarHost(snackbar, Modifier.align(androidx.compose.ui.Alignment.BottomCenter).padding(bottom = 96.dp))
+            if (askOverlay) {
+                AlertDialog(
+                    onDismissRequest = { answerOverlay(false) },
+                    title = { Text("Show taps over other apps?") },
+                    text = {
+                        Text("When someone taps your phone while DapTap is closed, the ripple and their card can " +
+                            "appear over whatever you're doing. Android calls this \u201cDisplay over other apps\u201d.")
+                    },
+                    confirmButton = { TextButton(onClick = { answerOverlay(true) }) { Text("Allow") } },
+                    dismissButton = { TextButton(onClick = { answerOverlay(false) }) { Text("Not now") } },
+                )
+            }
         }
     }
 }

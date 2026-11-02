@@ -77,6 +77,7 @@ fun CardScreen(
     onSend: () -> Unit,
     onFixNfc: () -> Unit,
     onEnableTap: () -> Unit,
+    onAddPhoto: () -> Unit,
 ) {
     val ground = LocalGround.current
     val reduce = reducedMotion(LocalContext.current)
@@ -98,7 +99,7 @@ fun CardScreen(
 
     Box(Modifier.fillMaxSize()) {
         Poster(card, photo, ground, topInset = top, bottomInset = contentPadding.calculateBottomPadding() + 72.dp,
-            nameProgress = build.value, wave = wave.value)
+            nameProgress = build.value, wave = wave.value, onAddPhoto = onAddPhoto)
 
         Row(
             Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).height(64.dp).padding(start = 20.dp, end = 8.dp),

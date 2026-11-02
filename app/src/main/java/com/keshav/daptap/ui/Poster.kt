@@ -12,6 +12,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.AddAPhoto
+import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -49,10 +60,13 @@ fun Poster(
     modifier: Modifier = Modifier,
     nameProgress: Float = 1f,
     wave: Float = -1f,
+    /** Your own card with no photo yet: show a tile that adds one (it travels in every AirDrop and tap). */
+    onAddPhoto: (() -> Unit)? = null,
 ) {
     val first = card.firstName.ifBlank { card.name.ifBlank { "YOU" } }
     BoxWithConstraints(modifier.fillMaxSize().background(ground.color)) {
         val pitch = posterPitch(first, maxWidth)
+        val lineWidth = maxWidth - pitch * 2
         val gridPitch = if (pitch < 9.dp) pitch * 2 else pitch
         ConstructionGrid(gridPitch, ground.line, Modifier.fillMaxSize(), wave = wave, origin = TapOrigin)
         val alignedTop = pitch * (ceil(topInset.value / pitch.value) + 1f)
@@ -60,15 +74,40 @@ fun Poster(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                 .padding(start = pitch, end = pitch, top = alignedTop, bottom = bottomInset + 24.dp)
         ) {
+            val photoCells = ceil(84f / pitch.value).coerceAtLeast(3f)
             if (photo != null) {
-                val cells = ceil(84f / pitch.value).coerceAtLeast(3f)
-                PhotoTile(photo, card, ground, pitch * cells)
+                PhotoTile(photo, card, ground, pitch * photoCells)
+                Spacer(Modifier.height(pitch))
+            } else if (onAddPhoto != null) {
+                Row(
+                    Modifier.clip(RoundedCornerShape(14.dp))
+                        .clickable(onClickLabel = "Add your photo", role = Role.Button, onClick = onAddPhoto),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(pitch * photoCells).clip(RoundedCornerShape(22)).background(ground.raised),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Outlined.AddAPhoto, contentDescription = null, tint = ground.ink, modifier = Modifier.size(28.dp)) }
+                    Spacer(Modifier.width(pitch))
+                    Column(Modifier.padding(end = 8.dp)) {
+                        Text("Add your photo", color = ground.ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                        Text("It goes with your card, so they see your face", color = ground.inkSoft, fontSize = 14.sp)
+                    }
+                }
                 Spacer(Modifier.height(pitch))
             }
             CellName(first, ground.ink, maxCell = pitch, progress = nameProgress, origin = Offset(0.5f, 0.5f))
             Spacer(Modifier.height(pitch))
             val rest = card.restOfName()
-            if (rest.isNotEmpty()) {
+            if (rest.isNotEmpty() && CellFont.canRender(rest)) {
+                // The surname is built on the same grid, a beat after the first name, in whole cells when it
+                // fits and otherwise in halves or thirds of one, so it stays on one line and still registers.
+                val cols = CellFont.layout(rest).columns
+                val split = ceil(cols * pitch.value / lineWidth.value).coerceAtLeast(1f)
+                CellName(rest, ground.ink, maxCell = pitch / split, origin = Offset(0f, 0.5f),
+                    progress = ((nameProgress - 0.2f) / 0.8f).coerceIn(0f, 1f))
+                Spacer(Modifier.height(pitch))
+            } else if (rest.isNotEmpty()) {
                 Text(rest, color = ground.ink, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }

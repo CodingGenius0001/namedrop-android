@@ -55,6 +55,8 @@ class SettingsActions(
     val copyLog: () -> Unit,
     val clearLog: () -> Unit,
     val openSource: () -> Unit,
+    val updateStatus: String,
+    val updateAction: Pair<String, () -> Unit>?,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -148,6 +150,7 @@ fun SettingsScreen(
 
             Section("About")
             Status("DapTap", "Version ${status.version}", "Source" to actions.openSource)
+            Status("Updates", actions.updateStatus, actions.updateAction)
             Spacer(Modifier.height(24.dp))
         }
     }
