@@ -61,6 +61,8 @@ fun EditCardScreen(
     initial: ContactCard,
     photo: ImageBitmap?,
     firstRun: Boolean,
+    /** Pull the phone's own "My profile" card in as soon as the screen opens (first run). */
+    autoFillFromProfile: Boolean = false,
     onPickPhoto: () -> Unit,
     onRemovePhoto: () -> Unit,
     onFillFromProfile: (apply: (ContactCard) -> Unit) -> Unit,
@@ -81,6 +83,15 @@ fun EditCardScreen(
     val nameError = tried && name.isBlank()
     val canLeave = !firstRun
     if (canLeave) BackHandler(onBack = onCancel)
+    val applyProfile: (ContactCard) -> Unit = { p ->
+        if (name.isBlank()) name = p.name
+        if (phone.isBlank()) phone = p.phone
+        if (email.isBlank()) email = p.email
+        if (company.isBlank()) company = p.company
+        if (title.isBlank()) title = p.title
+        if (website.isBlank()) website = p.website
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) { if (autoFillFromProfile) onFillFromProfile(applyProfile) }
 
     // Reads the field states at click time. (Capturing `draft` here would freeze the first
     // composition's values inside the memoized click lambda and save an empty card.)
@@ -125,16 +136,7 @@ fun EditCardScreen(
                 TextButton(onClick = onPickPhoto) { Text(if (photo == null) "Add photo" else "Change photo") }
                 if (photo != null) TextButton(onClick = onRemovePhoto) { Text("Remove photo") }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = {
-                    onFillFromProfile { p ->
-                        if (name.isBlank()) name = p.name
-                        if (phone.isBlank()) phone = p.phone
-                        if (email.isBlank()) email = p.email
-                        if (company.isBlank()) company = p.company
-                        if (title.isBlank()) title = p.title
-                        if (website.isBlank()) website = p.website
-                    }
-                }) { Text("Fill from my profile") }
+                TextButton(onClick = { onFillFromProfile(applyProfile) }) { Text("Fill from my profile") }
             }
 
             Text("Card colour", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))

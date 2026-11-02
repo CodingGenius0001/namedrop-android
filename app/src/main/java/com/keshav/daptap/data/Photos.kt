@@ -27,6 +27,13 @@ object Photos {
         true
     }.getOrDefault(false)
 
+    /** Stores already-encoded image bytes (e.g. the contact profile photo) as the user's photo. */
+    fun importMineBytes(context: Context, bytes: ByteArray): Boolean = runCatching {
+        val bmp = decodeBytes(bytes) ?: return false
+        myPhotoFile(context).writeBytes(jpeg(squareCrop(bmp, 720), 88))
+        true
+    }.getOrDefault(false)
+
     fun deleteMine(context: Context) { myPhotoFile(context).delete() }
 
     fun decodeBytes(bytes: ByteArray): Bitmap? = runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()

@@ -117,17 +117,28 @@ fun DapTapRoot(app: DapTapApp) {
         }
     }
     var pendingProfileApply by remember { mutableStateOf<((ContactCard) -> Unit)?>(null) }
-    fun fillFromProfile(apply: (ContactCard) -> Unit) {
+    fun fillFromProfile(apply: (ContactCard) -> Unit, quiet: Boolean = false) {
         scope.launch {
             val p = withContext(Dispatchers.IO) { ProfileReader.read(app) }
-            if (p != null) apply(p) else snackbar.showSnackbar("Your phone has no \"My profile\" card to copy from.")
+            if (p == null) {
+                if (!quiet) snackbar.showSnackbar("Your phone has no \"My profile\" card to copy from.")
+                return@launch
+            }
+            apply(p)
+            // Bring the profile photo along, unless you've already picked one for DapTap.
+            val imported = withContext(Dispatchers.IO) {
+                if (Photos.readMine(app) == null) ProfileReader.photo(app)?.let { Photos.importMineBytes(app, it) } ?: false else false
+            }
+            if (imported) app.prefs.photoChanged()
+            snackbar.showSnackbar("Filled in from your profile card. Check it and tap Save.")
         }
     }
+    var profileQuiet by remember { mutableStateOf(false) }
     val readContacts = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val apply = pendingProfileApply
         pendingProfileApply = null
-        if (granted && apply != null) fillFromProfile(apply)
-        else if (!granted) scope.launch { snackbar.showSnackbar("DapTap needs Contacts access to read your profile.") }
+        if (granted && apply != null) fillFromProfile(apply, quiet = profileQuiet)
+        else if (!granted && !profileQuiet) scope.launch { snackbar.showSnackbar("DapTap needs Contacts access to read your profile.") }
     }
     var pendingSave by remember { mutableStateOf<Pair<Person, ByteArray?>?>(null) }
     fun save(person: Person, photo: ByteArray?) {
@@ -212,10 +223,13 @@ fun DapTapRoot(app: DapTapApp) {
                         initial = card,
                         photo = myPhoto,
                         firstRun = !settings.onboarded || card.name.isBlank(),
+                        autoFillFromProfile = !settings.onboarded && card.name.isBlank(),
                         onPickPhoto = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         onRemovePhoto = { Photos.deleteMine(app); app.prefs.photoChanged() },
                         onFillFromProfile = { apply ->
-                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) fillFromProfile(apply)
+                            // The first-run auto-fill stays quiet when there's no profile or access is declined.
+                            profileQuiet = !settings.onboarded && card.name.isBlank()
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) fillFromProfile(apply, profileQuiet)
                             else { pendingProfileApply = apply; readContacts.launch(Manifest.permission.READ_CONTACTS) }
                         },
                         onSave = { c ->

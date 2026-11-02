@@ -8,6 +8,12 @@ import com.keshav.daptap.core.ContactCard
 
 /** Reads the phone's own "My profile" card (needs READ_CONTACTS). Returns null when there isn't one. */
 object ProfileReader {
+    /** The profile's photo (full size when the phone has one), or null. */
+    fun photo(context: Context): ByteArray? = runCatching {
+        ContactsContract.Contacts.openContactPhotoInputStream(context.contentResolver, ContactsContract.Profile.CONTENT_URI, true)
+            ?.use { it.readBytes() }
+    }.getOrNull()?.takeIf { it.size > 64 }
+
     fun read(context: Context): ContactCard? = runCatching {
         val uri = Uri.withAppendedPath(ContactsContract.Profile.CONTENT_URI, ContactsContract.Contacts.Data.CONTENT_DIRECTORY)
         var name = ""; var phone = ""; var email = ""; var company = ""; var title = ""; var website = ""
