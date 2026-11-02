@@ -398,7 +398,9 @@ class TapEngine(
     fun clearLog() { _log.value = emptyList() }
 
     companion object {
-        const val PEER_WINDOW_MS = 1_500L
+        /** How long to wait for another DapTap phone's card before assuming an iPhone. Covers a cold start of
+         *  DapTap on the other phone, which reads us through Android's tag dispatch and then pushes back. */
+        const val PEER_WINDOW_MS = 2_500L
         const val ACTION_DEBOUNCE_MS = 8_000L
         const val TOUCH_TIMEOUT_MS = 4_000L
         const val SENT_HOLD_MS = 6_000L

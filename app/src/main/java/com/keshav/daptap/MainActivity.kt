@@ -6,6 +6,8 @@ import android.content.Intent
 import android.net.Uri
 import android.nfc.NdefMessage
 import android.nfc.NfcAdapter
+import android.nfc.Tag
+import android.nfc.tech.IsoDep
 import android.nfc.cardemulation.CardEmulation
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.keshav.daptap.core.Ndef
+import com.keshav.daptap.core.Type4Reader
 import com.keshav.daptap.core.VCard
 import com.keshav.daptap.core.WirePayload
 import com.keshav.daptap.nfc.NameDropBeacon
@@ -110,11 +113,32 @@ class MainActivity : ComponentActivity() {
         val payload = messages.firstNotNullOfOrNull { Ndef.findPayload(it) }
         val vcard = if (payload == null) messages.firstNotNullOfOrNull { Ndef.findVCard(it) } else null
         when {
-            payload != null -> app.engine.receivePayload(payload, "tap")
+            payload != null -> {
+                // Another DapTap phone: hand ours back while the phones are still together, so both sides
+                // swap, and so that phone knows it was an Android (and doesn't open Quick Share for an iPhone).
+                @Suppress("DEPRECATION")
+                val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
+                lifecycleScope.launch {
+                    val pushed = tag != null && withContext(Dispatchers.IO) { pushOurCard(tag) }
+                    app.engine.receivePayload(payload, "tap", theyHaveOurs = pushed)
+                }
+            }
             // Any other phone or tag carrying a plain contact card.
             vcard != null -> app.engine.receiveVCard(vcard.card, vcard.photo, "tap")
             else -> app.engine.log("read a tag that isn't a contact card")
         }
+    }
+
+    private fun pushOurCard(tag: Tag): Boolean {
+        val iso = IsoDep.get(tag) ?: return false
+        val ok = runCatching {
+            iso.connect()
+            iso.timeout = 1_500
+            Type4Reader.push(app.engine.pushPayload()) { iso.transceive(it) }
+        }.getOrDefault(false)
+        runCatching { iso.close() }
+        app.engine.log(if (ok) "sent our card back to the other DapTap phone" else "couldn't hand our card back (they can still read it)")
+        return ok
     }
 
     private fun openUri(uri: Uri, type: String?, via: String = "airdrop") {

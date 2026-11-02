@@ -167,6 +167,18 @@ class TwoWaySwapTest {
         org.junit.Assert.assertArrayEquals(mine, got)
     }
 
+    @org.junit.Test fun `push works after the tag was reset by the system read`() {
+        // Android's own tag read (the dispatch path) can leave the other phone's tag deselected.
+        var got: ByteArray? = null
+        val tag = com.keshav.daptap.core.Type4Tag({ byteArrayOf() }, object : com.keshav.daptap.core.Type4Tag.Listener {
+            override fun onPeerCard(payload: ByteArray) { got = payload }
+        })
+        tag.reset()
+        val mine = "MINE".toByteArray()
+        org.junit.Assert.assertTrue(com.keshav.daptap.core.Type4Reader.push(mine) { tag.process(it) })
+        org.junit.Assert.assertArrayEquals(mine, got)
+    }
+
     @org.junit.Test fun `push is refused before select, out of order, or oversized`() {
         val tag = com.keshav.daptap.core.Type4Tag({ byteArrayOf() })
         fun hex(r: ByteArray) = r.takeLast(2).joinToString("") { "%02X".format(it) }

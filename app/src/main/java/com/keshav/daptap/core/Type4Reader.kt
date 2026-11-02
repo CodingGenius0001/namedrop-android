@@ -34,6 +34,9 @@ object Type4Reader {
     fun push(payload: ByteArray, transceive: (ByteArray) -> ByteArray?): Boolean = runCatching {
         val chunks = payload.toList().chunked(0xF0).map { it.toByteArray() }
         if (chunks.isEmpty() || chunks.size > 255) return false
+        // Select the DapTap application again: after Android's own tag read (the system dispatch path) the
+        // other phone may no longer have it selected. A tag that isn't DapTap simply refuses the push.
+        if (!ok(transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + Type4Tag.NDEF_AID + 0x00))) return false
         chunks.forEachIndexed { i, c ->
             val last = if (i == chunks.lastIndex) 0x01 else 0x00
             val r = transceive(byteArrayOf(0x80.toByte(), Type4Tag.INS_PUSH.toByte(), i.toByte(), last.toByte(), c.size.toByte()) + c)
