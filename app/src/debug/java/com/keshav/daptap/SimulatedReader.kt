@@ -19,6 +19,7 @@ class SimulatedReader : BroadcastReceiver() {
         if (intent.hasExtra("web")) app.prefs.updateSettings { it.copy(webFallback = intent.getBooleanExtra("web", false)) }
         if (intent.hasExtra("airdrop")) app.prefs.updateSettings { it.copy(airDropOnTap = intent.getBooleanExtra("airdrop", true)) }
         val engine = app.engine
+        if (intent.getBooleanExtra("namedrop", false)) { simulateNameDrop(context, engine); return }
         if (intent.getBooleanExtra("apple", false)) engine.onPollingFrame(byteArrayOf(0x6A, 0x02, 0xC8.toByte(), 0x01, 0x00, 0x00))
         val tag = Type4Tag({ engine.currentMessage() }, object : Type4Tag.Listener {
             override fun onReaderSelected() = engine.onReaderSelected()
@@ -57,5 +58,42 @@ class SimulatedReader : BroadcastReceiver() {
         Log.i("DapTapSim", "read ${body.size()} bytes, first record: $first")
         // The vCard record exactly as it went over the air, so it can be checked against a Contacts app.
         records.firstOrNull { it.tnf == Ndef.TNF_MIME }?.let { File(context.cacheDir, "simulated-vcard.vcf").writeBytes(it.payload) }
+    }
+
+    /**
+     * --ez namedrop true: an iPhone that heard our NameDrop frame. It tries a tag read (which the beacon must
+     * refuse), then runs the two-activation boop handshake through the real SnapApplet and identity.
+     */
+    private fun simulateNameDrop(context: Context, engine: com.keshav.daptap.tap.TapEngine) {
+        fun x(hex: String) = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        fun hx(b: ByteArray) = b.joinToString("") { "%02X".format(it) }
+        val (id, blobs) = com.keshav.daptap.nfc.SnapKeys.get(context)
+        engine.setBeaconActive(true)
+        engine.onPollingFrame(x("6A02890500010000000000000000"))
+        val tag = Type4Tag({ engine.currentMessage() }, object : Type4Tag.Listener {
+            override fun onNdefRefused() = engine.onNdefRefused()
+        }, refuseNdef = { engine.refuseNdef(it) })
+        val ndef = tag.process(x("00A4040007D276000085010100"))
+        val applet = com.keshav.daptap.core.SnapApplet(blobs)
+        fun send(cmd: ByteArray): ByteArray {
+            val r = applet.dispatch(cmd)!!
+            engine.onSnap(r.event, r.detail, applet.peerUuid, applet.peerLabel)
+            return r.response
+        }
+        val theirs = com.keshav.daptap.core.Cbor.encode(linkedMapOf(
+            0 to "1.1", 1 to "com.apple.boop.SNAP", 2 to listOf(linkedMapOf(0 to "Bonjour", 1 to 0)),
+            3 to linkedMapOf(0 to x("01020304"), 1 to id.spki, 2 to ByteArray(16) { 0x11 }, 3 to ByteArray(6), 4 to ByteArray(64), 5 to 1)))
+        val out = StringBuilder()
+        out.append("ndef=").append(hx(ndef)).append('\n')
+        out.append("select=").append(hx(send(x("00A4040009A000000858044F010000")))).append('\n')
+        val si = send(byteArrayOf(0, 0xCA.toByte(), 1, 3, theirs.size.toByte()) + theirs + 0)
+        out.append("serverinfo=").append(si.size - 2).append(" B sw=").append(hx(si.takeLast(2).toByteArray())).append('\n')
+        out.append("caps=").append(hx(send(byteArrayOf(0, 0xCA.toByte(), 1, 3, 85) + ByteArray(85) + 0).takeLast(2).toByteArray())).append('\n')
+        applet.reset()
+        send(x("00A4040009A000000858044F010000"))
+        out.append("resume=").append(hx(send(x("00CA010404" + "02195AA5" + "00")).takeLast(2).toByteArray())).append('\n')
+        out.append("uuid=").append(id.uuidString).append(" spki=").append(id.spki.size).append('\n')
+        File(context.cacheDir, "simulated-namedrop.txt").writeText(out.toString())
+        Log.i("DapTapSim", out.toString())
     }
 }

@@ -106,6 +106,17 @@ class TapEngine(
     private var lastOtherFrameLogAt = -1_000_000L
     private var resetJob: Job? = null
 
+    // NameDrop (see NameDropBeacon / SnapApplet)
+    @Volatile private var beaconActive = false
+    private var nameDropStartedAt = -1_000_000L
+    private var nameDropDoneAt = -1_000_000L
+    private var lastRefusalLogAt = -1_000_000L
+    private val nfcState = context.getSharedPreferences("daptap_nfc", Context.MODE_PRIVATE)
+    /** This phone's NFC chip has reported an iPhone's polling frames at least once, so they can be relied on. */
+    @Volatile private var framesReliable = nfcState.getBoolean("apple_frames_seen", false)
+    private val lanProbe by lazy { com.keshav.daptap.nfc.LanProbe(context, ::log) }
+    private var probeStopJob: Job? = null
+
     private var cachedMessage: ByteArray? = null
     private var cachedKey: String? = null
 
@@ -195,7 +206,72 @@ class TapEngine(
             })
         }
         lastAppleFrameAt = now
+        if (!framesReliable) { framesReliable = true; nfcState.edit().putBoolean("apple_frames_seen", true).apply() }
         iphoneTouch()
+    }
+
+    // ---------------------------------------------------------------- NameDrop
+
+    /** The beacon (DapTap open, Android 17) is emitting NameDrop frames. */
+    fun setBeaconActive(on: Boolean) {
+        beaconActive = on
+        probeStopJob?.cancel()
+        if (on) {
+            val uuid = runCatching { com.keshav.daptap.nfc.SnapKeys.get(context).first.uuidString }.getOrNull() ?: return
+            lanProbe.start(uuid)
+        } else {
+            // Keep listening a little after a handshake: the iPhone connects only once Share is tapped there.
+            val keep = (nameDropDoneAt + PROBE_AFTER_NAMEDROP_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0)
+            probeStopJob = scope.launch { delay(keep); if (!beaconActive) lanProbe.stop() }
+        }
+    }
+
+    /** A DapTap phone was just read or pushed to us: let that exchange finish before the next frame. */
+    fun beaconOnHold(): Boolean = SystemClock.elapsedRealtime() - maxOf(lastPeerTagAt, lastPushAt) < 2_500
+
+    /**
+     * Whether a reader should be turned away from our NDEF tag. While the beacon runs, an iPhone tries a tag
+     * read before it starts NameDrop; answering it makes iOS stop at the tag read. DapTap readers identify
+     * themselves and are never refused; the opt-in web card needs the tag read, so it disables this.
+     * Where the chip reports Apple frames, only a reader seen sending them (an iPhone) is refused.
+     */
+    fun refuseNdef(daptapReader: Boolean): Boolean {
+        if (daptapReader || !beaconActive || prefs.settings.value.webFallback) return false
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastAppleFrameAt < 3_000 || now - nameDropStartedAt < 10_000) return true
+        return !framesReliable
+    }
+
+    fun onNdefRefused() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRefusalLogAt > 2_000) log("turned the tag read away so the iPhone moves on to NameDrop")
+        lastRefusalLogAt = now
+    }
+
+    /** Progress of the NameDrop handshake with an iPhone (HCE thread = main thread). */
+    fun onSnap(event: com.keshav.daptap.core.SnapApplet.Event, detail: String, peerUuid: String?, peerLabel: String?) {
+        val now = SystemClock.elapsedRealtime()
+        log("NameDrop: $detail")
+        when (event) {
+            com.keshav.daptap.core.SnapApplet.Event.BOOP_SELECTED -> {
+                if (now - nameDropStartedAt > 10_000) log("iPhone started NameDrop with us")
+                nameDropStartedAt = now
+                lastAppleFrameAt = now
+                iphoneTouch()
+            }
+            com.keshav.daptap.core.SnapApplet.Event.SERVER_INFO -> {
+                nameDropStartedAt = now
+                log("NameDrop: iPhone listener $peerUuid, service ${peerLabel ?: "?"}")
+            }
+            com.keshav.daptap.core.SnapApplet.Event.RESUMED -> {
+                if (now - nameDropDoneAt > 10_000) {
+                    log("NameDrop handshake complete: the iPhone should show its NameDrop card now")
+                    _events.tryEmit("NameDrop started on the iPhone")
+                }
+                nameDropDoneAt = now
+            }
+            else -> {}
+        }
     }
 
     /** Something touched us in the beacon's reader phase that isn't a DapTap phone. */
@@ -259,6 +335,25 @@ class TapEngine(
             else -> Peer.UNKNOWN
         }
         log("decided peer=$peer (apple frames: $appleSeen)")
+        if (peer == Peer.IPHONE && beaconActive) {
+            // The iPhone runs NameDrop with us next. Anything that takes the screen now (Quick Share) would stop
+            // the beacon and the card, so wait for the handshake first.
+            val started = withTimeoutOrNull(NAMEDROP_START_WAIT_MS) {
+                while (nameDropStartedAt < touchStartedAt - 1_000) delay(50)
+            } != null
+            if (started) {
+                withTimeoutOrNull(NAMEDROP_FINISH_WAIT_MS) { while (nameDropDoneAt < nameDropStartedAt - 1_000) delay(50) }
+                val done = nameDropDoneAt >= nameDropStartedAt - 1_000
+                log(if (done) "NameDrop is up on the iPhone" else "NameDrop started but the iPhone didn't finish the handshake")
+                if (done && settings.airDropOnTap) {
+                    // DapTap can't answer the iPhone's AWDL connection yet, so the card follows by AirDrop once the
+                    // iPhone has had time to show NameDrop.
+                    delay(AIRDROP_AFTER_NAMEDROP_MS)
+                }
+            } else {
+                log("no NameDrop handshake from the iPhone")
+            }
+        }
         // Without the web card, the only reply that can come over the relay is a DapTap phone whose card
         // didn't make it back during the touch ("Send mine back"). Only then is it worth a connection.
         if (!settings.webFallback && peer != Peer.IPHONE && lastPushAt < touchStartedAt) listen(served, SWAP_LISTEN_MS)
@@ -421,6 +516,13 @@ class TapEngine(
         /** How long to wait for another DapTap phone's card before assuming an iPhone. Covers a cold start of
          *  DapTap on the other phone, which reads us through Android's tag dispatch and then pushes back. */
         const val PEER_WINDOW_MS = 2_000L
+        /** After an iPhone shows up, how long to wait for it to start NameDrop (it may need a few beacon cycles). */
+        const val NAMEDROP_START_WAIT_MS = 5_000L
+        const val NAMEDROP_FINISH_WAIT_MS = 5_000L
+        /** Lets the iPhone's NameDrop screen play before the AirDrop fallback arrives. */
+        const val AIRDROP_AFTER_NAMEDROP_MS = 8_000L
+        /** How long the Wi-Fi probe stays up after a handshake once DapTap leaves the screen. */
+        const val PROBE_AFTER_NAMEDROP_MS = 90_000L
         const val ACTION_DEBOUNCE_MS = 8_000L
         const val TOUCH_TIMEOUT_MS = 4_000L
         const val SENT_HOLD_MS = 6_000L

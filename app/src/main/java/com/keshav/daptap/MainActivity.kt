@@ -60,23 +60,30 @@ class MainActivity : ComponentActivity() {
             if (!BuildConfig.DEBUG) app.updater.check()
         }
         val adapter = nfc ?: return
-        runCatching {
-            // While DapTap is open, every tag the phone reads comes here first (no app chooser).
-            val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-            val pi = PendingIntent.getActivity(this, 0,
-                Intent(this, javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), flags)
-            adapter.enableForegroundDispatch(this, pi, null, null)
-        }
+        enableForegroundDispatch(adapter)
         runCatching {
             // And our card wins NFC routing even if another app claims the same tag AID.
             CardEmulation.getInstance(adapter).setPreferredService(this, ComponentName(this, TapService::class.java))
         }
         val settings = app.prefs.settings.value
-        if (settings.tapEnabled && settings.observeFrames && Build.VERSION.SDK_INT >= 35) {
+        val beaconOn = settings.tapEnabled && settings.nameDropBeacon && NameDropBeacon.isSupported(adapter)
+        // Observe mode keeps the card silent until we allow it, which would stall the NameDrop handshake.
+        if (!beaconOn && settings.tapEnabled && settings.observeFrames && Build.VERSION.SDK_INT >= 35) {
             runCatching { if (adapter.isObserveModeSupported) adapter.setObserveModeEnabled(true) }
         }
-        if (settings.tapEnabled && settings.nameDropBeacon) {
-            (beacon ?: NameDropBeacon(this, app.engine, lifecycleScope).also { beacon = it }).start()
+        if (beaconOn) {
+            (beacon ?: NameDropBeacon(this, app.engine, lifecycleScope) { enableForegroundDispatch(adapter) }
+                .also { beacon = it }).start()
+        }
+    }
+
+    /** While DapTap is open, every tag the phone reads comes here first (no app chooser). */
+    private fun enableForegroundDispatch(adapter: NfcAdapter) {
+        runCatching {
+            val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+            val pi = PendingIntent.getActivity(this, 0,
+                Intent(this, javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), flags)
+            adapter.enableForegroundDispatch(this, pi, null, null)
         }
     }
 
@@ -125,8 +132,38 @@ class MainActivity : ComponentActivity() {
             }
             // Any other phone or tag carrying a plain contact card.
             vcard != null -> app.engine.receiveVCard(vcard.card, vcard.photo, "tap")
-            else -> app.engine.log("read a tag that isn't a contact card")
+            else -> {
+                // A DapTap phone with its NameDrop beacon on turns Android's own tag read away (it can't tell it
+                // from an iPhone's). Read it ourselves: DapTap's reader says hello first, so it's let in.
+                @Suppress("DEPRECATION")
+                val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
+                if (tag == null || IsoDep.get(tag) == null) { app.engine.log("read a tag that isn't a contact card"); return }
+                lifecycleScope.launch { readDapTap(tag) }
+            }
         }
+    }
+
+    private suspend fun readDapTap(tag: Tag) {
+        val iso = IsoDep.get(tag) ?: return
+        val payload = withContext(Dispatchers.IO) {
+            runCatching {
+                iso.connect()
+                iso.timeout = 1_500
+                Type4Reader.read { iso.transceive(it) }
+            }.getOrNull()?.let { Ndef.decode(it) }?.let { Ndef.findPayload(it) }
+        }
+        if (payload == null) {
+            runCatching { iso.close() }
+            app.engine.log("read a tag that isn't a contact card")
+            return
+        }
+        app.engine.receivePayload(payload, "tap")
+        val pushed = withContext(Dispatchers.IO) {
+            runCatching { Type4Reader.push(app.engine.pushPayload()) { iso.transceive(it) } }.getOrDefault(false)
+                .also { runCatching { iso.close() } }
+        }
+        app.engine.log(if (pushed) "sent our card back to the other DapTap phone" else "couldn't hand our card back (they can still read it)")
+        if (pushed) app.engine.markTheyHaveOurs()
     }
 
     private fun pushOurCard(tag: Tag): Boolean {

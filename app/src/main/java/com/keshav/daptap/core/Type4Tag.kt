@@ -11,6 +11,12 @@ class Type4Tag(
     /** Called on application select; returns the NDEF message to serve for this read session. */
     private val messageProvider: () -> ByteArray,
     private val listener: Listener = object : Listener {},
+    /**
+     * Whether to turn this reader away from the NDEF application. During a NameDrop handshake an iPhone
+     * first tries to read us as a tag; answering lets iOS finish as a tag read and never start NameDrop.
+     * [daptapReader] is true when the reader announced itself as DapTap ([DAPTAP_AID]).
+     */
+    private val refuseNdef: (daptapReader: Boolean) -> Boolean = { false },
 ) {
     interface Listener {
         /** A reader selected our NDEF application: something is touching the phone. */
@@ -19,11 +25,14 @@ class Type4Tag(
         fun onMessageRead() {}
         /** A DapTap reader pushed its own card to us (INS DA), completing a two-way swap. */
         fun onPeerCard(payload: ByteArray) {}
+        /** We turned a tag read away (see refuseNdef). */
+        fun onNdefRefused() {}
     }
 
     private enum class File { NONE, CC, NDEF }
 
     private var appSelected = false
+    private var daptapReader = false
     private var file = File.NONE
     private var ndefFile = ByteArray(0)
     private var cc = ByteArray(0)
@@ -35,6 +44,7 @@ class Type4Tag(
     fun reset() {
         pushed.reset(); pushSeq = 0
         appSelected = false
+        daptapReader = false
         file = File.NONE
         readBodyEnd = false
         readComplete = false
@@ -57,7 +67,17 @@ class Type4Tag(
     private fun select(apdu: ByteArray, p1: Int, p2: Int): ByteArray {
         val data = commandData(apdu) ?: return SW_WRONG_LENGTH
         return when (p1) {
-            0x04 -> if (data.contentEquals(NDEF_AID)) {
+            0x04 -> if (data.contentEquals(DAPTAP_AID)) {
+                // A DapTap reader says hello before reading, so it is never mistaken for an iPhone.
+                daptapReader = true
+                appSelected = false
+                SW_OK
+            } else if (data.contentEquals(NDEF_AID) && refuseNdef(daptapReader)) {
+                appSelected = false
+                file = File.NONE
+                listener.onNdefRefused()
+                SW_FILE_NOT_FOUND
+            } else if (data.contentEquals(NDEF_AID)) {
                 appSelected = true
                 file = File.NONE
                 readBodyEnd = false
@@ -67,7 +87,10 @@ class Type4Tag(
                 cc = capabilityContainer(ndefFile.size)
                 listener.onReaderSelected()
                 SW_OK
-            } else SW_FILE_NOT_FOUND
+            } else {
+                appSelected = false
+                SW_FILE_NOT_FOUND
+            }
             0x00 -> {
                 if (!appSelected) return SW_FILE_NOT_FOUND
                 when {
@@ -158,6 +181,8 @@ class Type4Tag(
         const val MAX_LE = 0xF0
         const val INS_PUSH = 0xDA
 
+        /** DapTap's own proprietary AID ("\xF0DAPTAP"): selected by DapTap readers before the NDEF read. */
+        val DAPTAP_AID = byteArrayOf(0xF0.toByte(), 0x44, 0x41, 0x50, 0x54, 0x41, 0x50)
         val NDEF_AID = byteArrayOf(0xD2.toByte(), 0x76, 0x00, 0x00, 0x85.toByte(), 0x01, 0x01)
         val CC_FILE_ID = byteArrayOf(0xE1.toByte(), 0x03)
         val NDEF_FILE_ID = byteArrayOf(0xE1.toByte(), 0x04)

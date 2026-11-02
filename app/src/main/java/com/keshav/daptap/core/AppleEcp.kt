@@ -22,6 +22,16 @@ object AppleEcp {
         return byteArrayOf(HEADER, 0x02, 0x89.toByte(), TYPE_AIRDROP.toByte(), 0x00, 0x01, 0x00, 0x01) + bleAddress
     }
 
+    /**
+     * The NameDrop frame for one beacon burst. iOS ignores a frame it has just seen, so the 6-byte payload
+     * changes every burst: `c0 ff` then 4 random bytes (the pattern namedrop-re-public verified on iOS 26).
+     */
+    fun nameDropBurstFrame(random: java.util.Random): ByteArray =
+        nameDropFrame(byteArrayOf(0xC0.toByte(), 0xFF.toByte()) + ByteArray(4).also { random.nextBytes(it) })
+
+    /** The AirDrop frame (TCI 01 00 00, all-zero payload), alternated with the NameDrop frame. */
+    val AIRDROP_FRAME: ByteArray = byteArrayOf(HEADER, 0x02, 0x89.toByte(), TYPE_AIRDROP.toByte(), 0x00, 0x01, 0x00, 0x00) + ByteArray(6)
+
     fun classify(frame: ByteArray): Kind? {
         if (frame.size < 4 || frame[0] != HEADER) return null
         if (frame[1].toInt() != 0x02) return Kind.UNKNOWN // v1 frames carry no type we act on

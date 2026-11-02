@@ -2,9 +2,18 @@
 <host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/hce_description"
     android:requireDeviceUnlock="true">
-    <!-- NFC Forum Type 4 Tag NDEF application: what iPhones and Android phones read as a tag. -->
+    <!-- NFC Forum Type 4 Tag NDEF application: what Android phones read as a tag. DapTap readers select
+         DapTap's own AID (F0 "DAPTAP") first, so a DapTap phone is never mistaken for an iPhone. -->
     <aid-group android:category="other" android:description="@string/hce_aid_group">
         <aid-filter android:name="D2760000850101" />
+        <aid-filter android:name="F0444150544150" />
+    </aid-group>
+    <!-- Apple's NameDrop applet, com.apple.boop (RID A000000858). An iPhone that heard our NameDrop frame
+         selects it to start the handshake. No trailing '*' on the prefix: Android appends its own, and
+         "A000000858**" would be dropped silently. -->
+    <aid-group android:category="other" android:description="@string/hce_aid_boop">
+        <aid-filter android:name="A000000858044F0100" />
+        <aid-prefix-filter android:name="A000000858" />
     </aid-group>
     <!-- Android 15+: report Apple enhanced-contactless polling frames (0x6A…) so an iPhone is recognised early. -->
     <polling-loop-pattern-filter android:name="6A.*" android:autoTransact="false" />

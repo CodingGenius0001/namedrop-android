@@ -32,6 +32,8 @@ class DapTapApp : Application() {
         Notifications.createChannels(this)
         updater = com.keshav.daptap.update.Updater(this, BuildConfig.WEB_BASE)
         reportLastCrash()
+        // The NameDrop identity is minted once; do it off the main thread so the NFC service never waits on it.
+        scope.launch(Dispatchers.Default) { com.keshav.daptap.nfc.SnapKeys.warm(this@DapTapApp) }
         scope.launch {
             kotlinx.coroutines.flow.combine(prefs.card, prefs.photoVersion, prefs.settings) { _, _, _ -> }.collect {
                 kotlinx.coroutines.withContext(Dispatchers.Default) { runCatching { engine.currentMessage() } }
