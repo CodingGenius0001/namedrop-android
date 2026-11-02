@@ -118,9 +118,9 @@ class MainActivity : ComponentActivity() {
                 // swap, and so that phone knows it was an Android (and doesn't open Quick Share for an iPhone).
                 @Suppress("DEPRECATION")
                 val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
-                lifecycleScope.launch {
-                    val pushed = tag != null && withContext(Dispatchers.IO) { pushOurCard(tag) }
-                    app.engine.receivePayload(payload, "tap", theyHaveOurs = pushed)
+                app.engine.receivePayload(payload, "tap")
+                if (tag != null) lifecycleScope.launch {
+                    if (withContext(Dispatchers.IO) { pushOurCard(tag) }) app.engine.markTheyHaveOurs()
                 }
             }
             // Any other phone or tag carrying a plain contact card.

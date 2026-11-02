@@ -109,22 +109,26 @@ class NameDropBeacon(
     /** Called on a binder thread when something answers our poll. */
     private fun onTag(tag: Tag) {
         val iso = IsoDep.get(tag)
-        var pushedOk = false
-        val bytes = iso?.let {
-            runCatching {
-                it.connect()
-                it.timeout = 1_500
-                Type4Reader.read { apdu -> it.transceive(apdu) }?.also { _ ->
-                    // Hand them ours in the same touch: a two-way swap, like NameDrop.
-                    pushedOk = Type4Reader.push(engine.pushPayload()) { apdu -> it.transceive(apdu) }
-                    engine.log(if (pushedOk) "sent our card to the other DapTap phone" else "couldn't push our card (they can still read it)")
-                }
-            }.getOrNull().also { _ -> runCatching { iso.close() } }
-        }
+        if (iso == null) { scope.launch(Dispatchers.Main) { engine.onForeignTagInReaderPhase() }; return }
+        // Contact: buzz and ripple now, not after the whole card has crossed.
+        scope.launch(Dispatchers.Main) { engine.onReaderTouch() }
+        val bytes = runCatching {
+            iso.connect()
+            iso.timeout = 1_500
+            Type4Reader.read { iso.transceive(it) }
+        }.getOrNull()
         val payload = bytes?.let { Ndef.decode(it) }?.let { Ndef.findPayload(it) }
-        scope.launch(Dispatchers.Main) {
-            if (payload != null) engine.receivePayload(payload, "tap", theyHaveOurs = pushedOk) else engine.onForeignTagInReaderPhase()
+        if (payload == null) {
+            runCatching { iso.close() }
+            scope.launch(Dispatchers.Main) { engine.onForeignTagInReaderPhase() }
+            return
         }
+        // Their card goes on screen straight away; ours goes back while the phones are still together.
+        scope.launch(Dispatchers.Main) { engine.receivePayload(payload, "tap") }
+        val pushed = runCatching { Type4Reader.push(engine.pushPayload()) { iso.transceive(it) } }.getOrDefault(false)
+        runCatching { iso.close() }
+        engine.log(if (pushed) "sent our card to the other DapTap phone" else "couldn't push our card (they can still read it)")
+        if (pushed) scope.launch(Dispatchers.Main) { engine.markTheyHaveOurs() }
     }
 
     companion object {

@@ -10,6 +10,10 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -61,6 +65,9 @@ import com.keshav.daptap.tap.TapEngine
 
 enum class NfcState { ON, OFF, MISSING }
 
+/** Exponential-style ease-out: most of the distance in the first moment, like a burst. */
+private val BurstOut = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0.7f, 0.35f, 1f)
+
 /** Text on an accent fill (vermilion or yellow): about 6:1 on both. */
 private val LiveInk = androidx.compose.ui.graphics.Color(0xFF16161A)
 
@@ -88,8 +95,19 @@ fun CardScreen(
     val touching = phase is TapEngine.Phase.Touching
     LaunchedEffect(touching) {
         if (!touching || reduce) { wave.snapTo(-1f); return@LaunchedEffect }
-        while (true) { wave.snapTo(0f); wave.animateTo(1f, tween(1100, easing = LinearEasing)) }
+        // The first wave bursts out fast from the contact point; the ones after it keep a steady pulse.
+        var first = true
+        while (true) {
+            wave.snapTo(0f)
+            wave.animateTo(1f, if (first) tween(900, easing = BurstOut) else tween(1100, easing = LinearEasing))
+            first = false
+        }
     }
+    // The poster gives a little under the other phone, then springs back when the card goes.
+    val press by animateFloatAsState(
+        if (touching && !reduce) 0.975f else 1f,
+        spring(dampingRatio = 0.5f, stiffness = 420f), label = "press",
+    )
     LaunchedEffect(phase) {
         if (phase is TapEngine.Phase.Sent && !reduce) {
             build.snapTo(0f)
@@ -99,7 +117,11 @@ fun CardScreen(
 
     Box(Modifier.fillMaxSize()) {
         Poster(card, photo, ground, topInset = top, bottomInset = contentPadding.calculateBottomPadding() + 72.dp,
-            nameProgress = build.value, wave = wave.value, onAddPhoto = onAddPhoto)
+            nameProgress = build.value, wave = wave.value, onAddPhoto = onAddPhoto,
+            modifier = Modifier.graphicsLayer {
+                scaleX = press; scaleY = press
+                transformOrigin = TransformOrigin(TapOrigin.x, TapOrigin.y)
+            })
 
         Row(
             Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).height(64.dp).padding(start = 20.dp, end = 8.dp),

@@ -48,6 +48,8 @@ class TapEngine(
     interface Feedback {
         fun touch() {}
         fun sent(peer: Peer) {}
+        /** Someone's card just landed on this phone. */
+        fun received() {}
         fun appInForeground(): Boolean = true
         fun showOverlay(phase: Phase) {}
         fun launchQuickShare(card: ContactCard, photo: ByteArray?): Boolean = false
@@ -203,6 +205,23 @@ class TapEngine(
         iphoneTouch()
     }
 
+    /** Our beacon found another phone: give the touch feedback now, not after its whole card has crossed. */
+    fun onReaderTouch() {
+        val now = SystemClock.elapsedRealtime()
+        if (_phase.value !is Phase.Touching && _phase.value !is Phase.Sent) {
+            touchStartedAt = now
+            _phase.value = Phase.Touching(now)
+            feedback.touch()
+            if (!feedback.appInForeground() && prefs.settings.value.overlay) feedback.showOverlay(_phase.value)
+        }
+        scheduleReset()
+    }
+
+    /** Our card reached the phone whose card is on screen (sent back after theirs was shown). */
+    fun markTheyHaveOurs() {
+        _incoming.update { it?.copy(sharedBack = true) }
+    }
+
     private fun iphoneTouch() {
         val now = SystemClock.elapsedRealtime()
         if (_phase.value !is Phase.Touching && _phase.value !is Phase.Sent) {
@@ -297,6 +316,7 @@ class TapEngine(
             return
         }
         _incoming.value = Incoming(person, photo, replyTo, sharedBack = theyHaveOurs)
+        feedback.received()
         if (!feedback.appInForeground()) feedback.notifyIncoming(person)
     }
 
@@ -400,7 +420,7 @@ class TapEngine(
     companion object {
         /** How long to wait for another DapTap phone's card before assuming an iPhone. Covers a cold start of
          *  DapTap on the other phone, which reads us through Android's tag dispatch and then pushes back. */
-        const val PEER_WINDOW_MS = 2_500L
+        const val PEER_WINDOW_MS = 2_000L
         const val ACTION_DEBOUNCE_MS = 8_000L
         const val TOUCH_TIMEOUT_MS = 4_000L
         const val SENT_HOLD_MS = 6_000L

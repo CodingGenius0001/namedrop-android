@@ -20,17 +20,41 @@ class AndroidFeedback(private val app: DapTapApp) : TapEngine.Feedback {
     }
     private val overlay by lazy { OverlayController(app) }
 
-    override fun touch() = buzz(VibrationEffect.EFFECT_TICK, longArrayOf(0, 18))
+    // The tap's haptic arc: a rising swell when the phones meet, a swell into a snap when a card lands.
+    // Rich primitives where the vibrator has them (Galaxy and Pixel do), simpler effects otherwise.
 
-    override fun sent(peer: TapEngine.Peer) = buzz(VibrationEffect.EFFECT_DOUBLE_CLICK, longArrayOf(0, 30, 70, 40))
+    override fun touch() = play(
+        listOf(Prim(VibrationEffect.Composition.PRIMITIVE_QUICK_RISE, 0.55f), Prim(VibrationEffect.Composition.PRIMITIVE_TICK, 0.8f, 30)),
+        VibrationEffect.EFFECT_TICK, longArrayOf(0, 18),
+    )
 
-    private fun buzz(predefined: Int, fallback: LongArray) {
+    override fun sent(peer: TapEngine.Peer) {
+        if (peer == TapEngine.Peer.ANDROID) return // their card landing plays received(); one snap, not two
+        play(listOf(Prim(VibrationEffect.Composition.PRIMITIVE_SLOW_RISE, 0.5f), Prim(VibrationEffect.Composition.PRIMITIVE_CLICK, 1f, 20)),
+            VibrationEffect.EFFECT_DOUBLE_CLICK, longArrayOf(0, 30, 70, 40))
+    }
+
+    override fun received() = play(
+        listOf(Prim(VibrationEffect.Composition.PRIMITIVE_SLOW_RISE, 0.6f), Prim(VibrationEffect.Composition.PRIMITIVE_THUD, 1f, 10), Prim(VibrationEffect.Composition.PRIMITIVE_CLICK, 0.7f, 60)),
+        VibrationEffect.EFFECT_HEAVY_CLICK, longArrayOf(0, 40, 60, 30),
+    )
+
+    private class Prim(val id: Int, val scale: Float, val delayMs: Int = 0)
+
+    private fun play(primitives: List<Prim>, predefined: Int, fallback: LongArray) {
         val v = vibrator ?: return
         runCatching {
-            if (Build.VERSION.SDK_INT >= 29) v.vibrate(VibrationEffect.createPredefined(predefined))
-            else v.vibrate(VibrationEffect.createWaveform(fallback, -1))
+            when {
+                Build.VERSION.SDK_INT >= 31 && v.areAllPrimitivesSupported(*primitives.map { it.id }.toIntArray()) ->
+                    v.vibrate(VibrationEffect.startComposition().apply {
+                        primitives.forEach { addPrimitive(it.id, it.scale, it.delayMs) }
+                    }.compose())
+                Build.VERSION.SDK_INT >= 29 -> v.vibrate(VibrationEffect.createPredefined(predefined))
+                else -> v.vibrate(VibrationEffect.createWaveform(fallback, -1))
+            }
         }
     }
+
 
     override fun appInForeground() = app.startedActivities > 0
 
