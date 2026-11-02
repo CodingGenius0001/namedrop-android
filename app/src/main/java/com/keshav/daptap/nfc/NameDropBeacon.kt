@@ -24,9 +24,9 @@ import java.security.SecureRandom
 /**
  * While DapTap is open, the phone alternates between two NFC roles:
  *
- *  - Beacon (reader mode, [ON_MS]): emits Apple's ECP frame as an Android 17 polling-loop annotation,
- *    alternating the NameDrop frame (fresh payload every burst, since iOS ignores a repeat) and the AirDrop
- *    frame. That is what an iPhone sends another iPhone to start NameDrop.
+ *  - Beacon (reader mode, [ON_MS]): emits Apple's NameDrop ECP frame as an Android 17 polling-loop
+ *    annotation, with a fresh payload every burst since iOS ignores a repeat. That is what an iPhone sends
+ *    another iPhone to start NameDrop.
  *  - Card ([OFF_MS]): the iPhone, now treating us as a NameDrop peer, selects the boop applet in
  *    [TapService] and runs the handshake. Android phones read our tag in this phase too.
  *
@@ -90,7 +90,7 @@ class NameDropBeacon(
     }
 
     private fun burst() {
-        val frame = if (nextIsAirDrop) AppleEcp.AIRDROP_FRAME else AppleEcp.nameDropBurstFrame(random)
+        val frame = if (ALTERNATE_AIRDROP && nextIsAirDrop) AppleEcp.AIRDROP_FRAME else AppleEcp.nameDropBurstFrame(random)
         nextIsAirDrop = !nextIsAirDrop
         // Emission happens when reader mode is configured, so it must go off and on again each burst.
         setReader(false)
@@ -142,6 +142,12 @@ class NameDropBeacon(
     companion object {
         /** NfcAdapter.EXTRA_READER_TECH_A_POLLING_LOOP_ANNOTATION (API 37). */
         const val EXTRA_ANNOTATION = "android.nfc.extra.READER_TECH_A_POLLING_LOOP_ANNOTATION"
+
+        /**
+         * namedrop-re-public alternates the AirDrop frame with the NameDrop one. On the S26 test the iPhone
+         * answered an AirDrop frame with its AirDrop screen before NameDrop, so DapTap sends NameDrop only.
+         */
+        const val ALTERNATE_AIRDROP = false
 
         /** Below ~450 ms nothing goes out; 500 on / 2000 off was the measured sweet spot. */
         const val ON_MS = 500L
