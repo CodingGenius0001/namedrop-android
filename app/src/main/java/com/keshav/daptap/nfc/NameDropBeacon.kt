@@ -114,6 +114,8 @@ class NameDropBeacon(
 
     /** Called on a binder thread when something answers our poll. */
     private fun onTag(tag: Tag) {
+        // Talking to an iPhone's card from our reader side would interrupt the NameDrop it's running with us.
+        if (engine.iphoneNearby()) return
         val iso = IsoDep.get(tag)
         if (iso == null) { scope.launch(Dispatchers.Main) { engine.onForeignTagInReaderPhase() }; return }
         // Contact: buzz and ripple now, not after the whole card has crossed.

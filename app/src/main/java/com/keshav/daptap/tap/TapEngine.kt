@@ -226,6 +226,14 @@ class TapEngine(
         }
     }
 
+    /** An iPhone is running (or just ran) NameDrop with us: don't touch it from the reader side. */
+    fun iphoneNearby(): Boolean = SystemClock.elapsedRealtime() - maxOf(lastAppleFrameAt, nameDropStartedAt) < 10_000
+
+    /** The NFC link dropped while the iPhone had the NameDrop applet selected. */
+    fun onNameDropLinkEnded(reason: Int) {
+        log("NameDrop: NFC link ended (${if (reason == 0) "lost: phones moved or field dropped" else "iPhone deselected us"})")
+    }
+
     /** A DapTap phone was just read or pushed to us: let that exchange finish before the next frame. */
     fun beaconOnHold(): Boolean = SystemClock.elapsedRealtime() - maxOf(lastPeerTagAt, lastPushAt) < 2_500
 
@@ -335,6 +343,7 @@ class TapEngine(
             else -> Peer.UNKNOWN
         }
         log("decided peer=$peer (apple frames: $appleSeen)")
+        var nameDropEngaged = false
         if (peer == Peer.IPHONE && beaconActive) {
             // The iPhone runs NameDrop with us next. Anything that takes the screen now (Quick Share) would stop
             // the beacon and the card, so wait for the handshake first.
@@ -342,14 +351,10 @@ class TapEngine(
                 while (nameDropStartedAt < touchStartedAt - 1_000) delay(50)
             } != null
             if (started) {
+                nameDropEngaged = true
                 withTimeoutOrNull(NAMEDROP_FINISH_WAIT_MS) { while (nameDropDoneAt < nameDropStartedAt - 1_000) delay(50) }
                 val done = nameDropDoneAt >= nameDropStartedAt - 1_000
                 log(if (done) "NameDrop is up on the iPhone" else "NameDrop started but the iPhone didn't finish the handshake")
-                if (done && settings.airDropOnTap) {
-                    // DapTap can't answer the iPhone's AWDL connection yet, so the card follows by AirDrop once the
-                    // iPhone has had time to show NameDrop.
-                    delay(AIRDROP_AFTER_NAMEDROP_MS)
-                }
             } else {
                 log("no NameDrop handshake from the iPhone")
             }
@@ -358,7 +363,10 @@ class TapEngine(
         // didn't make it back during the touch ("Send mine back"). Only then is it worth a connection.
         if (!settings.webFallback && peer != Peer.IPHONE && lastPushAt < touchStartedAt) listen(served, SWAP_LISTEN_MS)
         var airDrop = false
-        if (peer != Peer.ANDROID && settings.airDropOnTap) {
+        // Once the iPhone has taken up NameDrop, an AirDrop request on top of it is exactly what NameDrop is
+        // meant to replace, so it is never opened automatically then (the card screen still offers it).
+        if (nameDropEngaged) log("NameDrop in progress: not opening Quick Share")
+        if (peer != Peer.ANDROID && settings.airDropOnTap && !nameDropEngaged) {
             val card = prefs.card.value
             // A failed handoff must never take the app down mid-tap: log it and carry on.
             airDrop = runCatching { feedback.launchQuickShare(card, Photos.readMine(context)) }
@@ -519,9 +527,7 @@ class TapEngine(
         const val PEER_WINDOW_MS = 2_000L
         /** After an iPhone shows up, how long to wait for it to start NameDrop (it may need a few beacon cycles). */
         const val NAMEDROP_START_WAIT_MS = 5_000L
-        const val NAMEDROP_FINISH_WAIT_MS = 5_000L
-        /** Lets the iPhone's NameDrop screen play before the AirDrop fallback arrives. */
-        const val AIRDROP_AFTER_NAMEDROP_MS = 8_000L
+        const val NAMEDROP_FINISH_WAIT_MS = 10_000L
         /** How long the Wi-Fi probe stays up after a handshake once DapTap leaves the screen. */
         const val PROBE_AFTER_NAMEDROP_MS = 90_000L
         const val ACTION_DEBOUNCE_MS = 8_000L

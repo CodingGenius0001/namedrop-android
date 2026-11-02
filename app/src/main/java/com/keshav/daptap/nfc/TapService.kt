@@ -46,6 +46,7 @@ class TapService : HostApduService() {
 
     override fun onDeactivated(reason: Int) {
         inSession = false
+        if (snap.selected) engine.onNameDropLinkEnded(reason)
         tag.reset()
         snap.reset()
         engine.onDeactivated()
