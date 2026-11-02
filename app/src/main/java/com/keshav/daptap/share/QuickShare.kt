@@ -32,11 +32,12 @@ object QuickShare {
         return FileProvider.getUriForFile(context, context.packageName + ".files", file)
     }
 
-    private fun sendIntent(uri: Uri, card: ContactCard) = Intent(Intent.ACTION_SEND).apply {
+    private fun sendIntent(context: Context, uri: Uri, card: ContactCard) = Intent(Intent.ACTION_SEND).apply {
         type = VCARD_MIME
         putExtra(Intent.EXTRA_STREAM, uri)
         putExtra(Intent.EXTRA_TITLE, card.name)
-        clipData = ClipData.newUri(null, card.name, uri)
+        // The resolver reads the file's type for the receiving app; a null one throws.
+        clipData = ClipData.newUri(context.contentResolver, card.name, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 
@@ -65,7 +66,7 @@ object QuickShare {
     /** Builds the intent that opens Quick Share (or the share sheet) with the user's card attached. */
     fun buildIntent(context: Context, card: ContactCard, photo: ByteArray?): Intent {
         val uri = vcardUri(context, card, photo)
-        val send = sendIntent(uri, card)
+        val send = sendIntent(context, uri, card)
         val target = findTarget(context)
         val intent = if (target?.component != null) Intent(send).setComponent(target.component)
         else Intent.createChooser(send, "Send your card")
@@ -80,7 +81,7 @@ object QuickShare {
         // Direct component refused (e.g. not exported on this build): fall back to the system sheet.
         runCatching {
             val uri = vcardUri(context, card, photo)
-            context.startActivity(Intent.createChooser(sendIntent(uri, card), "Send your card")
+            context.startActivity(Intent.createChooser(sendIntent(context, uri, card), "Send your card")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION))
             true
         }.getOrDefault(false)

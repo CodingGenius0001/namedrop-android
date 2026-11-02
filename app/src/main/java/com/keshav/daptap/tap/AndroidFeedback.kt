@@ -42,7 +42,7 @@ class AndroidFeedback(private val app: DapTapApp) : TapEngine.Feedback {
         // HostApduService is one of the system-bound services allowed to start activities from the
         // background; an overlay window (when permitted) is a second, independent allowance.
         val ok = QuickShare.launch(app, card, photo)
-        if (!ok) Notifications.sendPending(app, QuickShare.buildIntent(app, card, photo))
+        if (!ok) runCatching { Notifications.sendPending(app, QuickShare.buildIntent(app, card, photo)) }
         return ok
     }
 

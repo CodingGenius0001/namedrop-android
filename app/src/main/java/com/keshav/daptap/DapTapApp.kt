@@ -25,11 +25,13 @@ class DapTapApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        recordCrashes()
         prefs = Prefs(this)
         history = History(this)
         engine = TapEngine(this, prefs, history, Relay(BuildConfig.RELAY_BASE), scope, AndroidFeedback(this))
         Notifications.createChannels(this)
         updater = com.keshav.daptap.update.Updater(this, BuildConfig.WEB_BASE)
+        reportLastCrash()
         scope.launch {
             kotlinx.coroutines.flow.combine(prefs.card, prefs.photoVersion, prefs.settings) { _, _, _ -> }.collect {
                 kotlinx.coroutines.withContext(Dispatchers.Default) { runCatching { engine.currentMessage() } }
@@ -44,5 +46,24 @@ class DapTapApp : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: Activity) {}
         })
+    }
+
+    private val crashFile get() = java.io.File(filesDir, "last-crash.txt")
+
+    /** Keeps the stack trace of a crash so the next launch can show it in the tap log. */
+    private fun recordCrashes() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                crashFile.writeText("DapTap ${BuildConfig.VERSION_NAME} crashed on ${thread.name}:\n" + error.stackTraceToString().take(6000))
+            }
+            previous?.uncaughtException(thread, error)
+        }
+    }
+
+    private fun reportLastCrash() {
+        val text = runCatching { crashFile.takeIf { it.exists() }?.readText() }.getOrNull() ?: return
+        crashFile.delete()
+        text.lines().take(40).forEach { engine.log("CRASH $it") }
     }
 }

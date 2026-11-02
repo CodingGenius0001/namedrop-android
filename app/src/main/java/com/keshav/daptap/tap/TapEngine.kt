@@ -238,7 +238,10 @@ class TapEngine(
         var airDrop = false
         if (peer != Peer.ANDROID && settings.airDropOnTap) {
             val card = prefs.card.value
-            airDrop = feedback.launchQuickShare(card, Photos.readMine(context))
+            // A failed handoff must never take the app down mid-tap: log it and carry on.
+            airDrop = runCatching { feedback.launchQuickShare(card, Photos.readMine(context)) }
+                .onFailure { log("Quick Share failed: ${it.javaClass.simpleName}: ${it.message}") }
+                .getOrDefault(false)
             log(if (airDrop) "opened Quick Share with vCard" else "could not open Quick Share")
             if (airDrop && settings.autoPickIphone) AutoPick.arm()
         }
@@ -309,7 +312,9 @@ class TapEngine(
         return ok
     }
 
-    fun sendWithQuickShare(): Boolean = feedback.launchQuickShare(prefs.card.value, Photos.readMine(context))
+    fun sendWithQuickShare(): Boolean = runCatching { feedback.launchQuickShare(prefs.card.value, Photos.readMine(context)) }
+        .onFailure { log("Quick Share failed: ${it.javaClass.simpleName}: ${it.message}") }
+        .getOrDefault(false)
 
     // ---------------------------------------------------------------- relay mailbox
 
