@@ -507,7 +507,8 @@ class TapEngine(
     fun log(line: String) {
         val entry = timeFmt.format(Date()) + "  " + line
         _log.update { (it + entry).takeLast(LOG_MAX) }
-        if (BuildConfig.DEBUG) android.util.Log.d("DapTap", line)
+        // Also to logcat (release too), so the tap log can be read over adb while testing with a real iPhone.
+        android.util.Log.i("DapTap", line)
     }
 
     fun clearLog() { _log.value = emptyList() }
