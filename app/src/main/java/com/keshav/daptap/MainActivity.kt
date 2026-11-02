@@ -42,6 +42,11 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        beacon?.nudge()
+    }
+
     override fun onResume() {
         super.onResume()
         Notifications.cancelUpdated(this)

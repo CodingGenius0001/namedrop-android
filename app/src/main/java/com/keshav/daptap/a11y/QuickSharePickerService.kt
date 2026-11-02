@@ -1,5 +1,8 @@
 package com.keshav.daptap.a11y
 
+import android.os.Looper
+import android.os.Handler
+import android.content.Intent
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -9,12 +12,35 @@ import com.keshav.daptap.tap.AutoPick
 /**
  * Optional helper: right after a tap opened Quick Share, it taps the iPhone in Quick Share's device
  * list for you, but only when exactly one nearby device is an iPhone, so it can never pick the wrong one.
- * It only reacts to the Quick Share package, and only for 25 s after a tap (see [AutoPick]).
+ * It only reacts to the Quick Share package, and only for 25 s after a tap (see [AutoPick]). The rest of
+ * the time it subscribes to no events at all, so Android never wakes it.
  */
 class QuickSharePickerService : AccessibilityService() {
+    private val handler = Handler(Looper.getMainLooper())
+    private val sleep = Runnable { listen(false) }
+
+    override fun onServiceConnected() {
+        AutoPick.listener = { on -> handler.post { listen(on) } }
+        listen(AutoPick.armed)
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        AutoPick.listener = null
+        handler.removeCallbacks(sleep)
+        return super.onUnbind(intent)
+    }
+
+    /** Window events only while armed; none otherwise. */
+    private fun listen(on: Boolean) {
+        val info = serviceInfo ?: return
+        info.eventTypes = if (on) AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED else 0
+        serviceInfo = info
+        handler.removeCallbacks(sleep)
+        if (on) handler.postDelayed(sleep, 26_000)
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!AutoPick.armed) return
+        if (!AutoPick.armed) { listen(false); return }
         val pkg = event?.packageName?.toString() ?: return
         // Quick Share's device list (Samsung's app, Google's inside Play services, or a share-sheet host).
         if (!pkg.contains("share", ignoreCase = true) && pkg != "com.google.android.gms") return

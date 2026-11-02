@@ -156,8 +156,6 @@ private fun StatusChip(
     val live = armed && phase !is TapEngine.Phase.Ready
     val fill by animateColorAsState(if (live) ground.accent else ground.raised, tween(180), label = "fill")
     val ink by animateColorAsState(if (live) LiveInk else ground.ink, tween(180), label = "ink")
-    val pulse = rememberInfiniteTransition(label = "pulse")
-    val a by pulse.animateFloat(1f, 0.25f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "a")
     Surface(
         modifier = modifier.heightIn(min = 48.dp).semantics { liveRegion = LiveRegionMode.Polite }
             .let { if (action != null) it.clickable(onClick = action) else it },
@@ -169,10 +167,8 @@ private fun StatusChip(
             when {
                 phase is TapEngine.Phase.Sent && armed ->
                     Icon(Icons.Outlined.Check, contentDescription = null, tint = ink, modifier = Modifier.size(16.dp))
-                else -> StateDot(
-                    when { live -> ink; armed -> ground.accent; else -> ground.inkSoft },
-                    Modifier.alpha(if (phase is TapEngine.Phase.Touching) a else 1f),
-                )
+                phase is TapEngine.Phase.Touching && armed -> PulsingDot(ink)
+                else -> StateDot(if (armed) ground.accent else ground.inkSoft)
             }
             Spacer(Modifier.width(10.dp))
             AnimatedContent(text, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) }, label = "status") {
@@ -180,4 +176,15 @@ private fun StatusChip(
             }
         }
     }
+}
+
+/**
+ * The dot breathes only while phones are touching. It lives in its own composable so its animation clock
+ * exists only then: an infinite transition left running wakes the CPU on every frame even when unread.
+ */
+@Composable
+private fun PulsingDot(color: androidx.compose.ui.graphics.Color) {
+    val pulse = rememberInfiniteTransition(label = "pulse")
+    val a by pulse.animateFloat(1f, 0.25f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "a")
+    StateDot(color, Modifier.alpha(a))
 }

@@ -97,6 +97,7 @@ class TapEngine(
     private var touchStartedAt = 0L
     private var lastActionAt = -ACTION_DEBOUNCE_MS
     private var lastPeerTagAt = -1_000_000L
+    @Volatile private var lastPushAt = 0L
     private var lastAppleFrameAt = -1_000_000L
     private var lastOtherFrameLogAt = -1_000_000L
     private var resetJob: Job? = null
@@ -138,6 +139,7 @@ class TapEngine(
 
     /** A DapTap phone that read our tag pushed its card to us. Runs on the main thread (HCE). */
     fun onPushedCard(bytes: ByteArray) {
+        lastPushAt = SystemClock.elapsedRealtime()
         val payload = WirePayload.decode(String(bytes, Charsets.US_ASCII))
         if (payload == null) { log("ignored a malformed pushed card"); return }
         receivePayload(payload, "tap", theyHaveOurs = true)
@@ -160,10 +162,11 @@ class TapEngine(
         sessionUsedAt = now
         val served = session
         log("card read by peer (session ${served.id.take(6)}…)")
-        listen(served)
+        // Web-card replies can come back any time while they fill in the form.
+        if (prefs.settings.value.webFallback) listen(served, WEB_LISTEN_MS)
         if (now - lastActionAt < ACTION_DEBOUNCE_MS) return // the same hold, read again
         lastActionAt = now
-        scope.launch { decide(now) }
+        scope.launch { decide(now, served) }
     }
 
     /**
@@ -209,7 +212,7 @@ class TapEngine(
         scheduleReset()
         if (now - lastActionAt < ACTION_DEBOUNCE_MS) return
         lastActionAt = now
-        scope.launch { decide(now) }
+        scope.launch { decide(now, session) }
     }
 
     fun onDeactivated() {
@@ -220,7 +223,7 @@ class TapEngine(
         if (BuildConfig.DEBUG || _log.value.size < 400) log("> ${hex(command)}  < ${hex(response.takeLast(2).toByteArray())}")
     }
 
-    private suspend fun decide(readAt: Long) {
+    private suspend fun decide(readAt: Long, served: Relay.Session) {
         val settings = prefs.settings.value
         val appleSeen = readAt - lastAppleFrameAt < 3_000
         if (!appleSeen) {
@@ -235,6 +238,9 @@ class TapEngine(
             else -> Peer.UNKNOWN
         }
         log("decided peer=$peer (apple frames: $appleSeen)")
+        // Without the web card, the only reply that can come over the relay is a DapTap phone whose card
+        // didn't make it back during the touch ("Send mine back"). Only then is it worth a connection.
+        if (!settings.webFallback && peer != Peer.IPHONE && lastPushAt < touchStartedAt) listen(served, SWAP_LISTEN_MS)
         var airDrop = false
         if (peer != Peer.ANDROID && settings.airDropOnTap) {
             val card = prefs.card.value
@@ -341,12 +347,13 @@ class TapEngine(
 
     private fun fitsRelay(m: RelayMessage) = (m.encode().size + 28) * 4 / 3 + 4 <= Relay.MAX_BODY
 
-    /** Listens for replies on a session we handed out, for [LISTEN_MS]. */
-    private fun listen(s: Relay.Session) {
+    /** Listens for replies on a session we handed out, for [forMs]; the connection closes after that. */
+    private fun listen(s: Relay.Session, forMs: Long) {
         synchronized(listeners) {
             if (listeners[s.id]?.isActive == true) return
+            log("listening for a reply for ${forMs / 60_000} min")
             listeners[s.id] = scope.launch {
-                withTimeoutOrNull(LISTEN_MS) {
+                withTimeoutOrNull(forMs) {
                     relay.subscribe(s).collect { msg ->
                         if (msg.from == instanceId || msg.type != "card") return@collect
                         val payload = msg.card ?: return@collect
@@ -368,6 +375,7 @@ class TapEngine(
     fun log(line: String) {
         val entry = timeFmt.format(Date()) + "  " + line
         _log.update { (it + entry).takeLast(LOG_MAX) }
+        if (BuildConfig.DEBUG) android.util.Log.d("DapTap", line)
     }
 
     fun clearLog() { _log.value = emptyList() }
@@ -379,7 +387,8 @@ class TapEngine(
         const val SENT_HOLD_MS = 6_000L
         const val SESSION_MAX_AGE_MS = 10 * 60_000L
         const val SESSION_REUSE_MS = 60_000L
-        const val LISTEN_MS = 15 * 60_000L
+        const val WEB_LISTEN_MS = 10 * 60_000L
+        const val SWAP_LISTEN_MS = 3 * 60_000L
         /** The photo that rides on the tag: big enough for a contact header, small enough for a quick read. */
         const val NFC_PHOTO_PX = 128
         const val NFC_PHOTO_MAX = 3_600
