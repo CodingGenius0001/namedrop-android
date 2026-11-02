@@ -153,3 +153,26 @@ class Type4ReaderAndEcpTest {
         org.junit.Assert.assertNull(E.classify(byteArrayOf()))
     }
 }
+
+class TwoWaySwapTest {
+    @org.junit.Test fun `reader reads the tag then pushes its own card back`() {
+        val theirs = com.keshav.daptap.core.Ndef.encode(listOf(com.keshav.daptap.core.Ndef.externalRecord("keshav.com:daptap", "THEIRS".toByteArray())))
+        var got: ByteArray? = null
+        val tag = com.keshav.daptap.core.Type4Tag({ theirs }, object : com.keshav.daptap.core.Type4Tag.Listener {
+            override fun onPeerCard(payload: ByteArray) { got = payload }
+        })
+        val mine = ByteArray(3333) { (it % 251).toByte() }
+        org.junit.Assert.assertArrayEquals(theirs, com.keshav.daptap.core.Type4Reader.read { tag.process(it) })
+        org.junit.Assert.assertTrue(com.keshav.daptap.core.Type4Reader.push(mine) { tag.process(it) })
+        org.junit.Assert.assertArrayEquals(mine, got)
+    }
+
+    @org.junit.Test fun `push is refused before select, out of order, or oversized`() {
+        val tag = com.keshav.daptap.core.Type4Tag({ byteArrayOf() })
+        fun hex(r: ByteArray) = r.takeLast(2).joinToString("") { "%02X".format(it) }
+        org.junit.Assert.assertEquals("6A82", hex(tag.process(byteArrayOf(0x80.toByte(), 0xDA.toByte(), 0, 1, 1, 7))))
+        tag.process(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + com.keshav.daptap.core.Type4Tag.NDEF_AID + 0x00)
+        org.junit.Assert.assertEquals("6A86", hex(tag.process(byteArrayOf(0x80.toByte(), 0xDA.toByte(), 3, 0, 1, 7))))
+        org.junit.Assert.assertFalse(com.keshav.daptap.core.Type4Reader.push(ByteArray(70_000)) { tag.process(it) })
+    }
+}

@@ -91,16 +91,21 @@ class NameDropBeacon(
     /** Called on a binder thread when something answers our poll. */
     private fun onTag(tag: Tag) {
         val iso = IsoDep.get(tag)
+        var pushedOk = false
         val bytes = iso?.let {
             runCatching {
                 it.connect()
                 it.timeout = 1_500
-                Type4Reader.read { apdu -> it.transceive(apdu) }
+                Type4Reader.read { apdu -> it.transceive(apdu) }?.also { _ ->
+                    // Hand them ours in the same touch: a two-way swap, like NameDrop.
+                    pushedOk = Type4Reader.push(engine.pushPayload()) { apdu -> it.transceive(apdu) }
+                    engine.log(if (pushedOk) "sent our card to the other DapTap phone" else "couldn't push our card (they can still read it)")
+                }
             }.getOrNull().also { _ -> runCatching { iso.close() } }
         }
         val payload = bytes?.let { Ndef.decode(it) }?.let { Ndef.findPayload(it) }
         scope.launch(Dispatchers.Main) {
-            if (payload != null) engine.receivePayload(payload, "tap") else engine.onForeignTagInReaderPhase()
+            if (payload != null) engine.receivePayload(payload, "tap", theyHaveOurs = pushedOk) else engine.onForeignTagInReaderPhase()
         }
     }
 

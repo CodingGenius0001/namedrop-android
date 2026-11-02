@@ -17,6 +17,8 @@ class Type4Tag(
         fun onReaderSelected() {}
         /** The reader has read the entire NDEF message. */
         fun onMessageRead() {}
+        /** A DapTap reader pushed its own card to us (INS DA), completing a two-way swap. */
+        fun onPeerCard(payload: ByteArray) {}
     }
 
     private enum class File { NONE, CC, NDEF }
@@ -27,8 +29,11 @@ class Type4Tag(
     private var cc = ByteArray(0)
     private var readBodyEnd = false
     private var readComplete = false
+    private val pushed = java.io.ByteArrayOutputStream()
+    private var pushSeq = 0
 
     fun reset() {
+        pushed.reset(); pushSeq = 0
         appSelected = false
         file = File.NONE
         readBodyEnd = false
@@ -44,6 +49,7 @@ class Type4Tag(
             0xA4 -> select(apdu, p1, p2)
             0xB0 -> readBinary(apdu, p1, p2)
             0xD6 -> SW_SECURITY_NOT_SATISFIED // read-only tag
+            INS_PUSH -> push(apdu, p1, p2)
             else -> SW_INS_NOT_SUPPORTED
         }
     }
@@ -96,6 +102,26 @@ class Type4Tag(
         return chunk + SW_OK
     }
 
+    /**
+     * DapTap-to-DapTap card push: CLA 80, INS DA, P1 = chunk index, P2 = 01 on the last chunk.
+     * Only after our application is selected; chunks must arrive in order; total capped at 16 KB.
+     */
+    private fun push(apdu: ByteArray, p1: Int, p2: Int): ByteArray {
+        if (!appSelected) return SW_FILE_NOT_FOUND
+        val data = commandData(apdu) ?: return SW_WRONG_LENGTH
+        if (p1 == 0) { pushed.reset(); pushSeq = 0 }
+        if (p1 != pushSeq) { pushed.reset(); pushSeq = 0; return SW_INCORRECT_P1P2 }
+        if (pushed.size() + data.size > 16 * 1024) { pushed.reset(); pushSeq = 0; return SW_WRONG_LENGTH }
+        pushed.write(data)
+        pushSeq++
+        if (p2 == 0x01) {
+            val card = pushed.toByteArray()
+            pushed.reset(); pushSeq = 0
+            listener.onPeerCard(card)
+        }
+        return SW_OK
+    }
+
     /** Lc-prefixed data for a case-3/4 short APDU. */
     private fun commandData(apdu: ByteArray): ByteArray? {
         if (apdu.size < 5) return null
@@ -130,6 +156,7 @@ class Type4Tag(
     companion object {
         /** Max bytes per READ BINARY response. Short-APDU friendly, and plenty fast. */
         const val MAX_LE = 0xF0
+        const val INS_PUSH = 0xDA
 
         val NDEF_AID = byteArrayOf(0xD2.toByte(), 0x76, 0x00, 0x00, 0x85.toByte(), 0x01, 0x01)
         val CC_FILE_ID = byteArrayOf(0xE1.toByte(), 0x03)

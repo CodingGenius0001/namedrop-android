@@ -11,6 +11,7 @@ import com.keshav.daptap.tap.TapEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class DapTapApp : Application() {
     lateinit var prefs: Prefs; private set
@@ -27,6 +28,11 @@ class DapTapApp : Application() {
         history = History(this)
         engine = TapEngine(this, prefs, history, Relay(BuildConfig.RELAY_BASE), scope, AndroidFeedback(this))
         Notifications.createChannels(this)
+        scope.launch {
+            kotlinx.coroutines.flow.combine(prefs.card, prefs.photoVersion, prefs.settings) { _, _, _ -> }.collect {
+                kotlinx.coroutines.withContext(Dispatchers.Default) { runCatching { engine.currentMessage() } }
+            }
+        }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) { startedActivities++ }
             override fun onActivityStopped(activity: Activity) { startedActivities = (startedActivities - 1).coerceAtLeast(0) }

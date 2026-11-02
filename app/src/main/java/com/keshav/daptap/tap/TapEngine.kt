@@ -106,6 +106,7 @@ class TapEngine(
     // ---------------------------------------------------------------- NFC service callbacks (main thread)
 
     /** The NDEF message for this read. Cached; rebuilt only when the card, photo, settings or session change. */
+    @Synchronized
     fun currentMessage(): ByteArray {
         rotateSessionIfStale()
         val card = prefs.card.value
@@ -122,6 +123,21 @@ class TapEngine(
             add(Ndef.externalRecord(Ndef.DAPTAP_EXTERNAL_TYPE, full.encode().toByteArray(Charsets.US_ASCII)))
         }
         return Ndef.encode(records).also { cachedMessage = it; cachedKey = key }
+    }
+
+    /** Our card as pushed to another DapTap phone in a two-way swap. */
+    @Synchronized
+    fun pushPayload(): ByteArray {
+        rotateSessionIfStale()
+        val photo = Photos.readMine(context)?.let { Photos.thumbnail(it, 96, NFC_PHOTO_MAX) }
+        return WirePayload.of(prefs.card.value, session.id, session.keyText, photo).encode().toByteArray(Charsets.US_ASCII)
+    }
+
+    /** A DapTap phone that read our tag pushed its card to us. Runs on the main thread (HCE). */
+    fun onPushedCard(bytes: ByteArray) {
+        val payload = WirePayload.decode(String(bytes, Charsets.US_ASCII))
+        if (payload == null) { log("ignored a malformed pushed card"); return }
+        receivePayload(payload, "tap", theyHaveOurs = true)
     }
 
     fun onReaderSelected() {
@@ -241,14 +257,14 @@ class TapEngine(
     // ---------------------------------------------------------------- incoming cards
 
     /** A DapTap tag or web-card link was read from another phone. */
-    fun receivePayload(payload: WirePayload, via: String) {
+    fun receivePayload(payload: WirePayload, via: String, theyHaveOurs: Boolean = false) {
         lastPeerTagAt = SystemClock.elapsedRealtime()
         val card = payload.card()
         if (card.isEmpty) { log("ignored empty card"); return }
         val photo = payload.photoBytes()?.takeIf { Photos.decodeBytes(it) != null }
         val replyTo = Relay.sessionOf(payload.session, payload.key)
         log("received ${card.name} via $via")
-        present(card, photo, replyTo, via)
+        present(card, photo, replyTo, via, theyHaveOurs)
     }
 
     /** A vCard arrived (AirDropped from an iPhone through Quick Share, or shared into DapTap). */
@@ -257,15 +273,16 @@ class TapEngine(
         present(card.sanitized(), photo?.let { Photos.thumbnail(it, 720, 400_000) ?: it }, null, via)
     }
 
-    private fun present(card: ContactCard, photo: ByteArray?, replyTo: Relay.Session?, via: String) {
+    private fun present(card: ContactCard, photo: ByteArray?, replyTo: Relay.Session?, via: String, theyHaveOurs: Boolean = false) {
         val person = history.add(card, photo, via)
         val current = _incoming.value
         // The same person read twice during one hold: keep the screen, just refresh the photo.
         if (current != null && current.person.id == person.id) {
-            _incoming.value = current.copy(person = person, photo = photo ?: current.photo, replyTo = replyTo ?: current.replyTo)
+            _incoming.value = current.copy(person = person, photo = photo ?: current.photo, replyTo = replyTo ?: current.replyTo,
+                sharedBack = current.sharedBack || theyHaveOurs)
             return
         }
-        _incoming.value = Incoming(person, photo, replyTo)
+        _incoming.value = Incoming(person, photo, replyTo, sharedBack = theyHaveOurs)
         if (!feedback.appInForeground()) feedback.notifyIncoming(person)
     }
 

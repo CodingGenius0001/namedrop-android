@@ -23,6 +23,7 @@ class SimulatedReader : BroadcastReceiver() {
         val tag = Type4Tag({ engine.currentMessage() }, object : Type4Tag.Listener {
             override fun onReaderSelected() = engine.onReaderSelected()
             override fun onMessageRead() = engine.onMessageRead()
+            override fun onPeerCard(payload: ByteArray) = engine.onPushedCard(payload)
         })
         fun x(hex: String) = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         fun send(cmd: ByteArray): ByteArray = tag.process(cmd).also { engine.logApdu(cmd, it) }
@@ -37,6 +38,15 @@ class SimulatedReader : BroadcastReceiver() {
         while (off < nlen + 2) {
             val r = send(byteArrayOf(0, 0xB0.toByte(), (off ushr 8).toByte(), off.toByte(), minOf(0xF0, nlen + 2 - off).toByte()))
             body.write(r, 0, r.size - 2); off += r.size - 2
+        }
+        if (intent.getBooleanExtra("android", false)) {
+            // Act like another DapTap phone: push its card back in the same touch.
+            val peer = com.keshav.daptap.core.WirePayload.of(
+                com.keshav.daptap.core.ContactCard("Priya Raman", "+1 626 555 0123", "priya@example.com", "Caltech", "PhD student", label = 2),
+                com.keshav.daptap.relay.Relay.newSession().id, com.keshav.daptap.relay.Relay.newSession().keyText,
+            ).encode().toByteArray(Charsets.US_ASCII)
+            val ok = com.keshav.daptap.core.Type4Reader.push(peer) { send(it) }
+            Log.i("DapTapSim", "pushed peer card: $ok")
         }
         engine.onDeactivated()
         val records = Ndef.decode(body.toByteArray()).orEmpty()

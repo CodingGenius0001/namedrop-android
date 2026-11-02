@@ -118,7 +118,7 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
                 ) {
                     Text(
                         when {
-                            actions.sharedBack -> "Your card was sent back"
+                            actions.sharedBack -> "They have your card too"
                             actions.sharingBack -> "Sending…"
                             else -> "Send mine back"
                         },

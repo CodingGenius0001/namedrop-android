@@ -20,6 +20,7 @@ class TapService : HostApduService() {
             listener = object : Type4Tag.Listener {
                 override fun onReaderSelected() = engine.onReaderSelected()
                 override fun onMessageRead() = engine.onMessageRead()
+                override fun onPeerCard(payload: ByteArray) = engine.onPushedCard(payload)
             },
         )
     }
