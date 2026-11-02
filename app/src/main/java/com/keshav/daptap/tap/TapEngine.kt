@@ -92,6 +92,8 @@ class TapEngine(
     private var sessionCreatedAt = SystemClock.elapsedRealtime()
     private var sessionUsedAt = 0L
     private val listeners = HashMap<String, Job>()
+    /** When each session's listener closes; a later, longer request pushes it out instead of reconnecting. */
+    private val listenUntil = HashMap<String, Long>()
     private var photoPublishedFor: String? = null
 
     private var touchStartedAt = 0L
@@ -349,11 +351,20 @@ class TapEngine(
 
     /** Listens for replies on a session we handed out, for [forMs]; the connection closes after that. */
     private fun listen(s: Relay.Session, forMs: Long) {
+        val until = SystemClock.elapsedRealtime() + forMs
         synchronized(listeners) {
-            if (listeners[s.id]?.isActive == true) return
+            if (listeners[s.id]?.isActive == true) {
+                // Already connected: just keep the connection open longer if this asks for more.
+                if (until > (listenUntil[s.id] ?: 0L)) {
+                    listenUntil[s.id] = until
+                    log("listening for a reply for ${forMs / 60_000} min")
+                }
+                return
+            }
+            listenUntil[s.id] = until
             log("listening for a reply for ${forMs / 60_000} min")
             listeners[s.id] = scope.launch {
-                withTimeoutOrNull(forMs) {
+                val replies = launch {
                     relay.subscribe(s).collect { msg ->
                         if (msg.from == instanceId || msg.type != "card") return@collect
                         val payload = msg.card ?: return@collect
@@ -363,7 +374,13 @@ class TapEngine(
                         present(card, payload.photoBytes()?.takeIf { Photos.decodeBytes(it) != null }, null, "web")
                     }
                 }
-                synchronized(listeners) { listeners.remove(s.id) }
+                while (true) {
+                    val left = synchronized(listeners) { listenUntil[s.id] ?: 0L } - SystemClock.elapsedRealtime()
+                    if (left <= 0) break
+                    delay(left)
+                }
+                replies.cancel()
+                synchronized(listeners) { listeners.remove(s.id); listenUntil.remove(s.id) }
             }
         }
     }
