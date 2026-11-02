@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        Notifications.cancelUpdated(this)
         // Coming back from "Install unknown apps" continues an update; release builds also look for a newer
         // DapTap (once per launch, then at most every six hours). Debug builds are a different app id.
         lifecycleScope.launch {

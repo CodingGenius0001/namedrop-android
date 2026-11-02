@@ -16,7 +16,8 @@ import com.keshav.daptap.data.Person
 object Notifications {
     const val CHANNEL_INCOMING = "incoming"
     const val CHANNEL_TAP = "tap"
-    const val CHANNEL_UPDATES = "updates"
+    /** High importance so "DapTap updated" is seen: a self-update closes the app with nothing else on screen. */
+    const val CHANNEL_UPDATES = "app_updated"
     private const val ID_INCOMING = 10
     private const val ID_TAP = 11
     private const val ID_UPDATED = 12
@@ -28,7 +29,8 @@ object Notifications {
             .apply { description = "Someone shared their contact card with you" })
         nm.createNotificationChannel(NotificationChannel(CHANNEL_TAP, "Taps", NotificationManager.IMPORTANCE_DEFAULT)
             .apply { description = "Your card was shared by tapping phones" })
-        nm.createNotificationChannel(NotificationChannel(CHANNEL_UPDATES, "App updates", NotificationManager.IMPORTANCE_LOW)
+        nm.deleteNotificationChannel("updates") // 1.0.6–1.0.7 used a silent channel nobody noticed
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_UPDATES, "App updates", NotificationManager.IMPORTANCE_HIGH)
             .apply { description = "DapTap finished updating itself" })
     }
 
@@ -71,6 +73,8 @@ object Notifications {
         @Suppress("MissingPermission")
         NotificationManagerCompat.from(context).notify(ID_TAP, n)
     }
+
+    fun cancelUpdated(context: Context) = NotificationManagerCompat.from(context).cancel(ID_UPDATED)
 
     /** After a self-update closed the app: say it worked, and reopen it in one tap. */
     fun updated(context: Context, versionName: String) {

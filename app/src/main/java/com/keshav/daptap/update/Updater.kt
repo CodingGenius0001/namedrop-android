@@ -56,7 +56,23 @@ class Updater(
     private var lastCheck = 0L
     private var pending: Release? = null
 
+    private val seen = context.getSharedPreferences("daptap_update", Context.MODE_PRIVATE)
+
+    /** Set when this launch is the first since DapTap was updated, so the app can say so once. */
+    var justUpdatedTo: String? = null
+        private set
+
+    fun consumeJustUpdated(): String? = justUpdatedTo.also { justUpdatedTo = null }
+
     init {
+        val last = seen.getInt(KEY_SEEN, 0)
+        val updated = if (last != 0) last < BuildConfig.VERSION_CODE else runCatching {
+            // Builds before 1.0.8 didn't record this: fall back to whether the package was ever updated.
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0).let { it.lastUpdateTime > it.firstInstallTime }
+        }.getOrDefault(false)
+        if (updated) justUpdatedTo = BuildConfig.VERSION_NAME
+        seen.edit().putInt(KEY_SEEN, BuildConfig.VERSION_CODE).apply()
         // Downloads of this version or older are spent once it is installed.
         dir.listFiles()?.forEach { f ->
             val code = f.name.removePrefix("DapTap-").removeSuffix(".apk").toIntOrNull()
@@ -218,6 +234,7 @@ class Updater(
 
     companion object {
         const val ACTION_INSTALL_STATUS = "com.keshav.daptap.INSTALL_STATUS"
+        private const val KEY_SEEN = "seen_version_code"
         private const val CHECK_EVERY_MS = 6 * 60 * 60 * 1000L
 
         fun sha256(file: File): String {

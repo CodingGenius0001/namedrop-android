@@ -213,6 +213,9 @@ fun DapTapRoot(app: DapTapApp) {
                 if (r == SnackbarResult.ActionPerformed) startUpdate(u.release)
             }
             is Updater.State.Downloading -> snackbar.showSnackbar("Downloading DapTap ${u.release.versionName}…", duration = SnackbarDuration.Indefinite)
+            is Updater.State.Installing -> snackbar.showSnackbar(
+                "Installing. DapTap closes for a moment to finish, then it's ${u.release.versionName}.",
+                duration = SnackbarDuration.Indefinite)
             is Updater.State.NeedsPermission -> {
                 snackbar.showSnackbar("Allow DapTap to install its own updates, then come back.", duration = SnackbarDuration.Short)
             }
@@ -222,6 +225,9 @@ fun DapTapRoot(app: DapTapApp) {
             }
             else -> {}
         }
+    }
+    LaunchedEffect(Unit) {
+        app.updater.consumeJustUpdated()?.let { snackbar.showSnackbar("Updated to DapTap $it") }
     }
     LaunchedEffect(update is Updater.State.NeedsPermission) {
         if (update is Updater.State.NeedsPermission && Build.VERSION.SDK_INT >= 26) {
