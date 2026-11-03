@@ -28,6 +28,9 @@ class DapTapApp : Application() {
 
     @Volatile var startedActivities = 0; private set
     @Volatile private var currentPeerNetwork: android.net.Network? = null
+    @Volatile private var currentPeerIface: String? = null
+    /** Binds the helper to a link (set once the bind logic exists; the helper-up callback is built before it). */
+    @Volatile private var onHelperBind: ((String, android.net.Network, String) -> Unit)? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -45,8 +48,10 @@ class DapTapApp : Application() {
                 " · settings ${prefs.settings.value}"
         }.also { it.start(scope) }
         appleLink = com.keshav.daptap.applink.AppleLink(this, engine::log) {
-            // A new helper process has no network bound yet.
-            appleLink.helper.boundHandle = 0L
+            // A new helper process has no network bound yet: bind it to a link that's already up.
+            val network = currentPeerNetwork
+            val iface = currentPeerIface
+            if (network != null && iface != null) onHelperBind?.invoke(iface, network, "new helper")
             engine.restartNameDropServer()
         }
         appleLink.helper.onNotice = { engine.log("iPhone link helper: $it") }
@@ -63,14 +68,36 @@ class DapTapApp : Application() {
             scope.launch { if (appleLink.supported && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start() }
         }
         engine.swapDiagnostics = { if (appleLink.supported) appleLink.helper.stats()?.let { "iPhone link helper: $it" } else null }
-        val bindHelper = { iface: String, network: android.net.Network ->
+        /**
+         * Ties the helper's NameDrop socket to the Apple link. A bind made the moment the link's network appears can
+         * be too early: the bind succeeds, sends "succeed", and nothing reaches the iPhone. Every working swap had a
+         * second bind after mosey0 was fully up; 1.0.33 skipped repeats and the iPhone sat on "waiting". So this is
+         * never deduplicated: [rebindSoon] repeats it over the first seconds of a link, and an iPhone's first packet
+         * triggers one more (see HelperLink.onNewPeer). A bind is cheap: the helper applies it between receives.
+         */
+        val bindHelper = { iface: String, network: android.net.Network, why: String ->
             scope.launch(Dispatchers.IO) {
-                // The same link is reported more than once; a repeat bind would only hold up the relay.
-                if (appleLink.supported && appleLink.enabled && appleLink.helper.boundHandle != network.networkHandle) {
-                    appleLink.helper.bind(network.networkHandle)?.let { r ->
-                        if (r.startsWith("bound")) appleLink.helper.boundHandle = network.networkHandle
-                        engine.log("iPhone link: $iface $r")
-                    }
+                if (appleLink.supported && appleLink.enabled) {
+                    appleLink.helper.bind(network.networkHandle)?.let { r -> engine.log("iPhone link: $iface $r ($why)") }
+                }
+            }
+        }
+        onHelperBind = { iface, network, why -> bindHelper(iface, network, why) }
+        // The iPhone's first packet: the link is surely set up by now, so bind once more before we answer it.
+        appleLink.helper.onNewPeer = {
+            val network = currentPeerNetwork
+            val iface = currentPeerIface
+            if (network != null && iface != null) bindHelper(iface, network, "iPhone ${it.address.hostAddress} sent to us")
+        }
+        var rebindJob: kotlinx.coroutines.Job? = null
+        val rebindSoon = { iface: String, network: android.net.Network ->
+            rebindJob?.cancel()
+            rebindJob = scope.launch(Dispatchers.IO) {
+                var at = 0L
+                for (gap in REBIND_GAPS_MS) {
+                    kotlinx.coroutines.delay(gap); at += gap
+                    if (currentPeerNetwork != network) break
+                    bindHelper(iface, network, "+$at ms").join()
                 }
             }
         }
@@ -90,8 +117,10 @@ class DapTapApp : Application() {
         val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
             onPeerNetwork = { iface, network ->
                 currentPeerNetwork = network
+                currentPeerIface = iface
                 onPeerLinkUp(iface)
-                bindHelper(iface, network)
+                bindHelper(iface, network, "link up")
+                rebindSoon(iface, network)
                 engine.useAppleLinkNetwork(iface, network)
                 engine.onAppleLinkUp()
             }
@@ -99,8 +128,8 @@ class DapTapApp : Application() {
                 // A late loss of an older link must not shut down the one that's up now.
                 if (currentPeerNetwork == null || currentPeerNetwork == network) {
                     currentPeerNetwork = null
+                    rebindJob?.cancel()
                     peerLink.down()
-                    appleLink.helper.boundHandle = 0L
                     scope.launch { engine.keepProbe(false) }
                 }
             }
@@ -126,7 +155,7 @@ class DapTapApp : Application() {
                     val first = probed != ni.name
                     probed = ni.name
                     scope.launch(Dispatchers.IO) {
-                        linkRoute.networkFor(ni.name)?.let { bindHelper(ni.name, it); engine.useAppleLinkNetwork(ni.name, it) }
+                        linkRoute.networkFor(ni.name)?.let { bindHelper(ni.name, it, "interface up"); engine.useAppleLinkNetwork(ni.name, it) }
                         if (first) linkRoute.probe(ni) { handle, dst -> if (appleLink.supported) appleLink.helper.probe(handle, dst) else null }
                     }
                 }
@@ -199,5 +228,10 @@ class DapTapApp : Application() {
                 main.forEach { engine.log("FREEZE   ${it.trim()}") }
             }
         }
+    }
+
+    companion object {
+        /** Gaps between the repeat binds after an Apple link appears: at +150, +400, +900, +1900 and +3400 ms. */
+        private val REBIND_GAPS_MS = longArrayOf(150, 250, 500, 1_000, 1_500)
     }
 }

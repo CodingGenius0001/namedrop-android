@@ -38,8 +38,12 @@ class HelperLink(private val token: ByteArray) {
     /** Called with what the helper reports unasked (sends that failed), on the relay's receive thread. */
     @Volatile var onNotice: ((String) -> Unit)? = null
 
-    /** The network the helper's NameDrop socket was last tied to, so the same link isn't bound twice. */
-    @Volatile var boundHandle = 0L
+    /**
+     * Called (on the relay's receive thread, so it must not block) when a datagram arrives from an address we
+     * haven't heard from before: an iPhone has just started talking to us.
+     */
+    @Volatile var onNewPeer: ((InetSocketAddress) -> Unit)? = null
+    @Volatile private var lastPeer: InetSocketAddress? = null
 
     private fun text(b: ByteBuffer) = String(ByteArray(b.remaining()).also { b.get(it) })
 
@@ -102,6 +106,7 @@ class HelperLink(private val token: ByteArray) {
                     else -> continue
                 }
                 val from = LinkHelper.readAddress(b)
+                if (from.address != lastPeer?.address) { lastPeer = from; runCatching { onNewPeer?.invoke(from) } }
                 val n = minOf(b.remaining(), p.data.size - p.offset)
                 b.get(p.data, p.offset, n)
                 p.length = n
