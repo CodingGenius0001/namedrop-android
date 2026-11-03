@@ -55,8 +55,8 @@ object Wallet {
     val inkSoft = Color.White.copy(alpha = 0.78f)
     /** Values (phone numbers, times): the carbon-copy voice. About 8:1 on navy. */
     val carbon = Color(0xFFC3B8FF)
-    /** Live state and stamps. About 4.6:1 on navy. */
-    val jet = Color(0xFFFF5A47)
+    /** Live state and stamps. About 5:1 on navy, and still 4.5:1 through the lightest glass. */
+    val jet = Color(0xFFFF6A58)
     /** Text on a jet fill. */
     val onJet = Color(0xFF16161A)
     val perforation = Color.White.copy(alpha = 0.34f)
@@ -122,8 +122,8 @@ fun GlassPass(
             val c = corner.toPx()
             val cover = Path().apply { addRoundRect(RoundRect(Rect(Offset.Zero, size), CornerRadius(c))) }
             for (i in stack.coerceAtMost(2) downTo 1) {
-                val inset = (10 * i).dp.toPx()
-                val drop = (12 * i).dp.toPx()
+                val inset = (12 * i).dp.toPx()
+                val drop = (16 * i).dp.toPx()
                 val peek = Path().apply {
                     addRoundRect(RoundRect(Rect(inset, size.height - c * 3, size.width - inset, size.height + drop), CornerRadius(c)))
                 }
@@ -213,6 +213,6 @@ fun Stamp(text: String, modifier: Modifier = Modifier, color: Color = Wallet.jet
 fun PassHead(left: String, right: String?, modifier: Modifier = Modifier) {
     androidx.compose.foundation.layout.Row(modifier.fillMaxWidth().height(20.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(left, style = Wallet.tabCaps, modifier = Modifier.weight(1f))
-        if (right != null) Text(right, style = Wallet.tabCaps)
+        if (right != null) Text(right, style = Wallet.tabCaps.copy(color = if (right.startsWith("NO.")) Wallet.carbon else Wallet.inkSoft))
     }
 }

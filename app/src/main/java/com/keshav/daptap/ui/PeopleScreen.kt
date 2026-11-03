@@ -54,13 +54,15 @@ fun PeopleScreen(
     contentPadding: PaddingValues,
     onOpen: (Person) -> Unit,
 ) {
+    // One ground under the title and the passes, so the band never ends in a seam.
+    Box(Modifier.fillMaxSize().walletGround()) {
     Scaffold(
-        topBar = { GroundTopBar("People") },
-        containerColor = Wallet.navyBottom,
+        topBar = { PeopleTopBar() },
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         contentWindowInsets = WindowInsets(0),
         modifier = Modifier.padding(bottom = contentPadding.calculateBottomPadding()),
     ) { padding ->
-        Box(Modifier.fillMaxSize().walletGround()) {
+        Box(Modifier.fillMaxSize()) {
             if (people.isEmpty()) {
                 EmptyPeople(Modifier.padding(padding))
                 return@Box
@@ -75,6 +77,18 @@ fun PeopleScreen(
             }
         }
     }
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun PeopleTopBar() {
+    androidx.compose.material3.TopAppBar(
+        title = { Text("People", fontWeight = FontWeight.Bold, fontSize = 22.sp) },
+        colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+            containerColor = androidx.compose.ui.graphics.Color.Transparent, titleContentColor = Wallet.ink,
+        ),
+    )
 }
 
 @Composable
@@ -104,9 +118,11 @@ private fun PersonPass(p: Person, photo: androidx.compose.ui.graphics.ImageBitma
                 Column(Modifier.weight(1f)) {
                     if (first.isBlank()) {
                         // An iPhone can share a number and photo but no name: say so, and what to do.
-                        Text("No name yet", color = Wallet.ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text(p.card.phone.ifBlank { p.card.email }.ifBlank { "Open to add their name" },
-                            color = Wallet.carbon, fontSize = 15.sp, modifier = Modifier.padding(top = 2.dp))
+                        // What tells two nameless cards apart is the number they shared: it leads.
+                        Text(p.card.phone.ifBlank { p.card.email }.ifBlank { "No details" }, color = Wallet.carbon,
+                            fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                            style = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum"))
+                        Text("No name yet · open to add one", color = Wallet.inkSoft, fontSize = 15.sp, modifier = Modifier.padding(top = 2.dp))
                     } else {
                         CellName(first, Wallet.ink, maxCell = cell, origin = Offset(0f, 0.5f))
                         Spacer(Modifier.height(10.dp))

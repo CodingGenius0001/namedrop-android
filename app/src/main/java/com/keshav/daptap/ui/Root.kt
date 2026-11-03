@@ -94,6 +94,7 @@ fun DapTapRoot(app: DapTapApp) {
     val myPhoto = rememberBitmap(myPhotoBytes)
 
     var tab by rememberSaveable { mutableStateOf(Tab.CARD) }
+    var settingUp by rememberSaveable { mutableStateOf(false) }
     var editing by rememberSaveable { mutableStateOf(!settings.onboarded || card.name.isBlank()) }
     var viewingId by rememberSaveable { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
@@ -250,16 +251,9 @@ fun DapTapRoot(app: DapTapApp) {
     val link by app.appleLink.state.collectAsState()
     LaunchedEffect(resumeTick) { app.appleLink.refresh() }
     fun setUpIphoneLink() {
+        // The pairing code is typed into a notification, so ask for notifications first; the guide does the rest.
         if (Build.VERSION.SDK_INT >= 33 && !status.notificationsAllowed) requestNotifications()
-        com.keshav.daptap.applink.PairingService.start(context)
-        val devOptions = Settings.Global.getInt(context.contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
-        if (devOptions) {
-            context.openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
-            scope.launch { snackbar.showSnackbar("Turn on Wireless debugging, tap it, then “Pair device with pairing code”. Type the code into DapTap's notification.") }
-        } else {
-            context.openSettings(Settings.ACTION_DEVICE_INFO_SETTINGS)
-            scope.launch { snackbar.showSnackbar("First turn on Developer options: tap Build number 7 times (Software information), then come back and tap Set up again.") }
-        }
+        settingUp = true
     }
     val linkRow: Pair<String, Pair<String, () -> Unit>?> = when (link.phase) {
         com.keshav.daptap.applink.AppleLink.Phase.UNSUPPORTED -> "Needs Android 11 or newer" to null
@@ -279,12 +273,13 @@ fun DapTapRoot(app: DapTapApp) {
         val inc = incoming
         val viewing = viewingId?.let { id -> people.firstOrNull { it.id == id } }
         // Every screen but the editor starts on a ground, so the status bar icons stay light.
-        val drenched = inc != null || !editing
+        val drenched = inc != null || settingUp || (!editing && tab != Tab.SETTINGS)
         SystemBarIcons(lightIcons = drenched || androidx.compose.foundation.isSystemInDarkTheme())
         Box(Modifier.fillMaxSize()) {
             AnimatedContent(
                 targetState = when {
                     inc != null -> "incoming:" + inc.person.id
+                    settingUp -> "setup"
                     editing -> "edit"
                     viewing != null -> "person:" + viewing.id
                     else -> "tabs"
@@ -293,6 +288,7 @@ fun DapTapRoot(app: DapTapApp) {
                 label = "screen",
             ) { screen ->
                 when {
+                    screen == "setup" -> SetupScreen(app.appleLink, onClose = { settingUp = false })
                     screen.startsWith("incoming") && inc != null -> PersonScreen(
                         card = inc.person.card,
                         photo = rememberBitmap(inc.photo),

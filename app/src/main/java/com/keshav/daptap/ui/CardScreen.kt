@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.keshav.daptap.core.ContactCard
 import com.keshav.daptap.tap.TapEngine
+import kotlinx.coroutines.launch
 
 enum class NfcState { ON, OFF, MISSING }
 
@@ -99,6 +100,7 @@ fun CardScreen(
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp
 
     val shine = remember { Animatable(-1f) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val build = remember { Animatable(1f) }
     val touching = phase is TapEngine.Phase.Touching
     LaunchedEffect(touching) {
@@ -126,8 +128,14 @@ fun CardScreen(
     Box(Modifier.fillMaxSize()) {
         Poster(card, photo, ground, topInset = top, bottomInset = contentPadding.calculateBottomPadding() + 80.dp,
             nameProgress = build.value, wave = shine.value, onAddPhoto = onAddPhoto,
-            headRight = "DAPTAP", stack = minOf(peopleCount, 2),
-            stub = { Stub(phase, nfc, tapEnabled, lastSwap, onFixNfc, onEnableTap, reduce) },
+            stack = minOf(peopleCount, 2),
+            headRight = "NO. %04d".format(peopleCount + 1),
+            stub = {
+                Stub(phase, nfc, tapEnabled, lastSwap, onFixNfc, onEnableTap, reduce, onTear = {
+                    // The stub going: one sweep of light along the glass edge.
+                    scope.launch { shine.snapTo(0f); shine.animateTo(1f, tween(520, easing = BurstOut)); shine.snapTo(-1f) }
+                })
+            },
             passModifier = Modifier.graphicsLayer {
                 scaleX = press; scaleY = press
                 transformOrigin = TransformOrigin(TapOrigin.x, TapOrigin.y)
@@ -181,20 +189,24 @@ private fun stubText(
 @Composable
 private fun Stub(
     phase: TapEngine.Phase, nfc: NfcState, tapEnabled: Boolean, lastSwap: String?,
-    onFixNfc: () -> Unit, onEnableTap: () -> Unit, reduce: Boolean,
+    onFixNfc: () -> Unit, onEnableTap: () -> Unit, reduce: Boolean, onTear: () -> Unit,
 ) {
     val want = stubText(phase, nfc, tapEnabled, lastSwap, onFixNfc, onEnableTap)
     var shown by remember { mutableStateOf(want) }
     val tear = remember { Animatable(0f) }
     val slam = remember { Animatable(1f) }
-    LaunchedEffect(want) {
+    // Keyed on what the stub says (StubText carries lambdas, which differ on every composition).
+    LaunchedEffect(want.head, want.line, want.stamp) {
         val tearing = shown.stamp != null && want.stamp == null && !reduce
         if (tearing) {
+            onTear()
             tear.animateTo(1f, tween(380, easing = FastOutSlowInEasing))
             shown = want
             tear.snapTo(-0.4f)
             tear.animateTo(0f, tween(260, easing = BurstOut))
         } else {
+            // A tap that lands mid-tear must not leave the stub half gone.
+            tear.snapTo(0f)
             val newStamp = want.stamp != null && want.stamp != shown.stamp
             shown = want
             if (newStamp && !reduce) {
@@ -207,7 +219,8 @@ private fun Stub(
     Row(
         Modifier.fillMaxWidth()
             .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
-            .let { m -> shown.action?.let { a -> m.clickable(onClick = a) } ?: m }
+            .heightIn(min = 48.dp)
+            .let { m -> want.action?.let { a -> m.clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = a) } ?: m }
             .graphicsLayer {
                 // Tearing away: the stub drops and tilts from its left end. Arriving (t < 0): it rises into place.
                 translationY = t * 36.dp.toPx()
@@ -221,7 +234,7 @@ private fun Stub(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
                     !shown.armed -> StateDot(Wallet.inkSoft)
-                    phase is TapEngine.Phase.Touching -> PulsingDot(Wallet.jet)
+                    phase is TapEngine.Phase.Touching && !reduce -> PulsingDot(Wallet.jet)
                     else -> StateDot(Wallet.jet)
                 }
                 Spacer(Modifier.width(8.dp))

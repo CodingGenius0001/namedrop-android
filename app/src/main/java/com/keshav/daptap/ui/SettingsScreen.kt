@@ -81,7 +81,10 @@ fun SettingsScreen(
     // Collected here, not at the app root: the tap log changes many times a tap and only this screen shows it.
     val log by logFlow.collectAsState()
     Scaffold(
-        topBar = { GroundTopBar("Settings") },
+        topBar = {
+            @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+            androidx.compose.material3.TopAppBar(title = { Text("Settings", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, fontSize = 22.sp) })
+        },
         contentWindowInsets = WindowInsets(0),
         modifier = Modifier.padding(bottom = contentPadding.calculateBottomPadding()),
     ) { padding ->

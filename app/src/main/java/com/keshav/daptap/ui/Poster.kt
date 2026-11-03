@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -83,9 +84,12 @@ fun Poster(
     BoxWithConstraints(modifier.fillMaxSize().walletGround()) {
         val inner = maxWidth - WALLET_MARGIN * 2 - PASS_PADDING * 2
         val pitch = posterPitch(first, inner)
+        // The pass sits in the middle of the free space (no dead band above the button), and scrolls when taller.
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(start = WALLET_MARGIN, end = WALLET_MARGIN, top = topInset + 8.dp, bottom = bottomInset + 24.dp)
+                .heightIn(min = maxHeight)
+                .padding(start = WALLET_MARGIN, end = WALLET_MARGIN, top = topInset + 8.dp, bottom = bottomInset + 24.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
         ) {
             GlassPass(
                 ground, passModifier.fillMaxWidth(), stubHeight = if (stub != null) STUB_HEIGHT else null,
@@ -126,7 +130,7 @@ fun Poster(
                 }
             }
             // Room for the older passes peeking out under this one.
-            if (stack > 0) Spacer(Modifier.height((12 * stack.coerceAtMost(2)).dp))
+            if (stack > 0) Spacer(Modifier.height((16 * stack.coerceAtMost(2)).dp))
         }
     }
 }
