@@ -80,7 +80,7 @@ class PairingService : Service() {
             notify("Paired. Starting the iPhone link…", null, ask = false)
             val started = link.start()
             done(if (started.isSuccess) "iPhone link is on" else "Paired, but the link didn't start",
-                if (started.isSuccess) "You can turn off Wireless debugging. Tap phones with an iPhone to NameDrop."
+                if (started.isSuccess) "Keep USB debugging on (no cable needed): it keeps the link running. Tap phones with an iPhone to NameDrop."
                 else started.exceptionOrNull()?.message)
         }
     }

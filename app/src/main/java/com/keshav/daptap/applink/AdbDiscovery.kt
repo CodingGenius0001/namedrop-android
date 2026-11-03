@@ -37,7 +37,8 @@ object AdbDiscovery {
                             }
                         })
                     }.onFailure { done.countDown() }
-                    done.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    // Stopping the watch interrupts this wait; that's fine, just stop.
+                    try { done.await(5, java.util.concurrent.TimeUnit.SECONDS) } catch (_: InterruptedException) {}
                 }
             }
             override fun onServiceLost(info: NsdServiceInfo) {}
@@ -54,10 +55,27 @@ object AdbDiscovery {
     }
 
     /** The first port of [type] this phone advertises within [timeoutMs], or null. */
-    suspend fun find(context: Context, type: String, timeoutMs: Long): Int? {
-        val ch = Channel<Int>(Channel.CONFLATED)
+    suspend fun find(context: Context, type: String, timeoutMs: Long): Int? = firstWorking(context, type, timeoutMs) { it }
+
+    /**
+     * Tries each port of [type] this phone advertises with [attempt] until one succeeds or [timeoutMs] passes.
+     * mDNS can hand back a stale port from before adbd moved (e.g. Wireless debugging toggled), so a refused
+     * port just means waiting for the next one.
+     */
+    suspend fun <T> firstWorking(context: Context, type: String, timeoutMs: Long, attempt: suspend (Int) -> T?): T? {
+        val ch = Channel<Int>(Channel.UNLIMITED)
         val handle = watch(context, type) { ch.trySend(it) }
-        return try { withTimeoutOrNull(timeoutMs) { ch.receive() } } finally { handle.close() }
+        val tried = HashSet<Int>()
+        return try {
+            withTimeoutOrNull(timeoutMs) {
+                var result: T? = null
+                while (result == null) {
+                    val port = ch.receive()
+                    if (tried.add(port)) result = runCatching { attempt(port) }.getOrNull()
+                }
+                result
+            }
+        } finally { handle.close() }
     }
 
     private fun isOwn(host: InetAddress?): Boolean {

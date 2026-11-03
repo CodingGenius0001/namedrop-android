@@ -11,6 +11,7 @@ import com.keshav.daptap.tap.TapEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -44,7 +45,7 @@ class DapTapApp : Application() {
         }.also { it.start(scope) }
         appleLink = com.keshav.daptap.applink.AppleLink(this, engine::log) { engine.restartNameDropServer() }
         engine.relaySocketProvider = {
-            if (appleLink.supported && appleLink.helper.ping(300) != null) appleLink.helper.relaySocket() else null
+            if (appleLink.supported && appleLink.helper.ping(700) != null) appleLink.helper.relaySocket() else null
         }
         val bindHelper = { iface: String, network: android.net.Network ->
             scope.launch(Dispatchers.IO) {
@@ -54,6 +55,9 @@ class DapTapApp : Application() {
         val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
             onPeerNetwork = { iface, network -> bindHelper(iface, network); engine.useAppleLinkNetwork(iface, network) }
             watch()
+        }
+        scope.launch {
+            prefs.settings.map { it.testingMode }.distinctUntilChanged().collectLatest { on -> if (on && appleLink.supported) appleLink.watch() }
         }
         // Bring the iPhone link helper back after a restart or update, if DapTap may switch Wireless debugging on.
         scope.launch {

@@ -72,6 +72,12 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
             if (!paired) { _state.value = State(Phase.NOT_PAIRED); return@withContext Result.failure(IllegalStateException("not paired")) }
             _state.value = State(Phase.STARTING, "Starting the iPhone link…")
             val resolver = context.contentResolver
+            // The helper lives in adbd's process group: when adbd stops, it goes too. With USB debugging on, adbd
+            // keeps running when Wireless debugging goes off (Wi-Fi changes, or the Apple link taking over Wi-Fi).
+            if (Settings.Global.getInt(resolver, Settings.Global.ADB_ENABLED, 0) == 0 && canToggleWirelessDebugging) {
+                runCatching { Settings.Global.putInt(resolver, Settings.Global.ADB_ENABLED, 1) }
+                    .onSuccess { log("iPhone link: turned on USB debugging so the helper outlives Wireless debugging"); delay(2_000) }
+            }
             val wasOn = Settings.Global.getInt(resolver, ADB_WIFI, 0) == 1
             var switchedOn = false
             val result = runCatching {
@@ -79,9 +85,6 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                     Settings.Global.putInt(resolver, ADB_WIFI, 1)
                     switchedOn = true
                 }
-                val port = AdbDiscovery.find(context, AdbDiscovery.CONNECT, 10_000)
-                    ?: error(if (switchedOn || wasOn) "Wireless debugging didn't come up. Connect to Wi-Fi and try again."
-                             else "Turn on Wireless debugging (Developer options), on Wi-Fi, then try again.")
                 val apk = context.applicationInfo.sourceDir
                 val cmd = buildString {
                     append("pm grant ${context.packageName} ${Manifest.permission.WRITE_SECURE_SETTINGS} 2>/dev/null; ")
@@ -90,15 +93,20 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                     // detach into its own session first.
                     append("sleep 1")
                 }
-                val out = runCatching { Adb(context).shell("127.0.0.1", port, cmd) }.getOrElse {
-                    if (it.message?.contains("pair again") == true) prefs.edit().putBoolean("paired", false).apply()
-                    throw it
-                }
+                var lastError: Throwable? = null
+                val out = AdbDiscovery.firstWorking(context, AdbDiscovery.CONNECT, 12_000) { port ->
+                    runCatching { Adb(context).shell("127.0.0.1", port, cmd) }.onFailure { e ->
+                        lastError = e
+                        if (e.message?.contains("pair again") == true) prefs.edit().putBoolean("paired", false).apply()
+                    }.getOrNull()
+                } ?: throw (lastError ?: IllegalStateException(
+                    if (switchedOn || wasOn) "Wireless debugging didn't come up. Connect to Wi-Fi and try again."
+                    else "Turn on Wireless debugging (Developer options), on Wi-Fi, then try again."))
                 if (out.isNotBlank()) log("iPhone link: shell said ${out.trim().take(200)}")
                 var s: HelperLink.Status? = null
                 for (i in 0 until 25) { s = helper.ping(); if (s != null) break; delay(200) }
                 s ?: error("the helper didn't start")
-                "running as uid ${s.uid}"
+                "running as uid ${s.uid} (${adbState()})"
             }
             if (switchedOn) runCatching { Settings.Global.putInt(resolver, ADB_WIFI, 0) }
             result.onSuccess {
@@ -113,6 +121,31 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     }
 
     fun setMessage(phase: Phase, message: String?) { _state.value = State(phase, message) }
+
+    /** Testing mode: logs the moment the helper appears or disappears, with what adbd and Wi-Fi were doing. */
+    suspend fun watch() = withContext(Dispatchers.IO) {
+        var last: Boolean? = null
+        while (true) {
+            val up = helper.ping(600) != null
+            if (up != last && (last != null || up)) log("iPhone link watchdog: helper ${if (up) "up" else "GONE"} · ${adbState()}")
+            last = up
+            delay(1_000)
+        }
+    }
+
+    fun adbState(): String {
+        val r = context.contentResolver
+        fun prop(name: String) = runCatching {
+            Runtime.getRuntime().exec(arrayOf("getprop", name)).inputStream.bufferedReader().readText().trim()
+        }.getOrDefault("?").ifEmpty { "-" }
+        val wifi = runCatching {
+            val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+            @Suppress("DEPRECATION")
+            cm.allNetworks.mapNotNull { cm.getLinkProperties(it)?.interfaceName }.joinToString(",")
+        }.getOrDefault("?")
+        return "usb debugging=${Settings.Global.getInt(r, Settings.Global.ADB_ENABLED, 0)} wireless=${Settings.Global.getInt(r, ADB_WIFI, 0)} " +
+            "adbd=${prop("init.svc.adbd")} usb=${prop("sys.usb.state")} nets=$wifi"
+    }
 
     companion object {
         const val ADB_WIFI = "adb_wifi_enabled"
