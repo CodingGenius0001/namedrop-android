@@ -27,6 +27,7 @@ class DapTapApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     @Volatile var startedActivities = 0; private set
+    @Volatile private var currentPeerNetwork: android.net.Network? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -43,42 +44,95 @@ class DapTapApp : Application() {
                 " · NameDrop beacon supported: ${com.keshav.daptap.nfc.NameDropBeacon.isSupported(android.nfc.NfcAdapter.getDefaultAdapter(this))}" +
                 " · settings ${prefs.settings.value}"
         }.also { it.start(scope) }
-        appleLink = com.keshav.daptap.applink.AppleLink(this, engine::log) { engine.restartNameDropServer() }
-        engine.relaySocketProvider = {
-            if (appleLink.supported && appleLink.enabled && appleLink.helper.ping(700) != null) appleLink.helper.relaySocket() else null
+        appleLink = com.keshav.daptap.applink.AppleLink(this, engine::log) {
+            // A new helper process has no network bound yet.
+            appleLink.helper.boundHandle = 0L
+            engine.restartNameDropServer()
         }
+        appleLink.helper.onNotice = { engine.log("iPhone link helper: $it") }
+        engine.relaySocketProvider = {
+            // The state says whether the helper is up without a round trip; a quick ping covers a stale state.
+            if (appleLink.supported && appleLink.enabled &&
+                (appleLink.state.value.phase == com.keshav.daptap.applink.AppleLink.Phase.RUNNING || appleLink.helper.ping(150) != null))
+                appleLink.helper.relaySocket() else null
+        }
+        engine.appleLinkReady = {
+            appleLink.supported && appleLink.enabled && appleLink.state.value.phase == com.keshav.daptap.applink.AppleLink.Phase.RUNNING
+        }
+        engine.startAppleLink = {
+            scope.launch { if (appleLink.supported && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start() }
+        }
+        engine.swapDiagnostics = { if (appleLink.supported) appleLink.helper.stats()?.let { "iPhone link helper: $it" } else null }
         val bindHelper = { iface: String, network: android.net.Network ->
             scope.launch(Dispatchers.IO) {
-                if (appleLink.supported && appleLink.enabled) appleLink.helper.bind(network.networkHandle)?.let { engine.log("iPhone link: $iface $it") }
+                // The same link is reported more than once; a repeat bind would only hold up the relay.
+                if (appleLink.supported && appleLink.enabled && appleLink.helper.boundHandle != network.networkHandle) {
+                    appleLink.helper.bind(network.networkHandle)?.let { r ->
+                        if (r.startsWith("bound")) appleLink.helper.boundHandle = network.networkHandle
+                        engine.log("iPhone link: $iface $r")
+                    }
+                }
             }
         }
+        val peerLink = com.keshav.daptap.diag.PeerLink(engine::log) {
+            runCatching { com.keshav.daptap.nfc.SnapKeys.get(this).first.uuidString }.getOrNull()
+        }
+        /** The Apple link is up: announce our listener on it at once and send replies through it. */
+        val onPeerLinkUp = { iface: String ->
+            scope.launch(Dispatchers.IO) {
+                // The interface can lag its network by a moment.
+                var ni: java.net.NetworkInterface? = null
+                for (i in 0 until 60) { ni = runCatching { java.net.NetworkInterface.getByName(iface) }.getOrNull(); if (ni != null) break; kotlinx.coroutines.delay(50) }
+                ni?.let(peerLink::up) ?: engine.log("peer link: $iface not visible as an interface")
+            }
+            scope.launch { engine.keepProbe(true) }
+        }
         val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
-            onPeerNetwork = { iface, network -> bindHelper(iface, network); engine.useAppleLinkNetwork(iface, network); engine.onAppleLinkUp() }
+            onPeerNetwork = { iface, network ->
+                currentPeerNetwork = network
+                onPeerLinkUp(iface)
+                bindHelper(iface, network)
+                engine.useAppleLinkNetwork(iface, network)
+                engine.onAppleLinkUp()
+            }
+            onPeerNetworkLost = { _, network ->
+                // A late loss of an older link must not shut down the one that's up now.
+                if (currentPeerNetwork == null || currentPeerNetwork == network) {
+                    currentPeerNetwork = null
+                    peerLink.down()
+                    appleLink.helper.boundHandle = 0L
+                    scope.launch { engine.keepProbe(false) }
+                }
+            }
             watch()
         }
         scope.launch {
             prefs.settings.map { it.testingMode }.distinctUntilChanged().collectLatest { on -> if (on && appleLink.supported) appleLink.watch() }
         }
-        // Bring the iPhone link helper back after a restart or update, if DapTap may switch Wireless debugging on.
+        // Bring the iPhone link helper back after a restart, or replace one from an older DapTap after an update, if
+        // DapTap may switch Wireless debugging on. An older helper keeps working meanwhile.
         scope.launch {
-            if (appleLink.supported && !appleLink.refresh() && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start()
+            val up = appleLink.supported && appleLink.refresh()
+            if (appleLink.supported && (!up || appleLink.outdated) && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start()
         }
-        val peerLink = com.keshav.daptap.diag.PeerLink(engine::log) {
-            runCatching { com.keshav.daptap.nfc.SnapKeys.get(this).first.uuidString }.getOrNull()
-        }
+        // Testing mode: log interface changes, and probe what can be sent on a new Apple link (once per link).
+        var probed: String? = null
         com.keshav.daptap.diag.InterfaceWatch(engine::log,
             onUp = { ni ->
                 if (com.keshav.daptap.diag.PeerLink.isPeerLink(ni.name)) {
-                    scope.launch { engine.keepProbe(true) }
+                    // Normally the network callback got here first; this covers a link Android shows no network for.
                     peerLink.up(ni)
+                    scope.launch { engine.keepProbe(true) }
+                    val first = probed != ni.name
+                    probed = ni.name
                     scope.launch(Dispatchers.IO) {
                         linkRoute.networkFor(ni.name)?.let { bindHelper(ni.name, it); engine.useAppleLinkNetwork(ni.name, it) }
-                        linkRoute.probe(ni) { handle, dst -> if (appleLink.supported) appleLink.helper.probe(handle, dst) else null }
+                        if (first) linkRoute.probe(ni) { handle, dst -> if (appleLink.supported) appleLink.helper.probe(handle, dst) else null }
                     }
                 }
             },
             onGone = { name ->
-                if (com.keshav.daptap.diag.PeerLink.isPeerLink(name)) { peerLink.down(); scope.launch { engine.keepProbe(false) } }
+                if (com.keshav.daptap.diag.PeerLink.isPeerLink(name)) { probed = null; peerLink.down(); scope.launch { engine.keepProbe(false) } }
             },
         ).start(scope, prefs.settings.map { it.testingMode })
         scope.launch {

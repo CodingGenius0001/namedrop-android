@@ -28,8 +28,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
@@ -56,6 +54,12 @@ class TapEngine(
         fun launchQuickShare(card: ContactCard, photo: ByteArray?): Boolean = false
         /** Cover the screen with DapTap's own "swapping with iPhone" view (Quick Share runs underneath). */
         fun coverAppleLink(on: Boolean): Boolean = false
+        /** The iPhone's card arrived during a swap: show it on the cover right away. False if there's no cover. */
+        fun coverCard(person: Person, photo: ByteArray?): Boolean = false
+        /** Build what opening Quick Share needs (card file, intent) ahead of time, off the main thread. */
+        fun prepareQuickShare(card: ContactCard, photo: ByteArray?) {}
+        /** Bring DapTap's own screen to the front (without a launch animation). */
+        fun bringAppForward() {}
         fun notifyIncoming(person: Person) {}
     }
 
@@ -111,8 +115,31 @@ class TapEngine(
 
     // NameDrop (see NameDropBeacon / SnapApplet)
     @Volatile private var beaconActive = false
-    private var nameDropStartedAt = -1_000_000L
-    private var nameDropDoneAt = -1_000_000L
+    /** The beacon is switched on (DapTap open), even while it rests between touches. */
+    @Volatile private var beaconEnabled = false
+    /** Set by the beacon: burst a NameDrop frame now (an iPhone just showed up), not at the next cycle. */
+    @Volatile var beaconKick: (() -> Unit)? = null
+    /** Set by the beacon: when its recent bursts went out, for the tap timeline. */
+    @Volatile var beaconHistory: (() -> String)? = null
+    @Volatile private var nameDropStartedAt = -1_000_000L
+    @Volatile private var nameDropDoneAt = -1_000_000L
+    @Volatile private var appleLinkFinishedAt = -1_000_000L
+    /** This NFC activation turned an iPhone's tag read away (it needs our next NameDrop frame). */
+    @Volatile private var refusedThisActivation = false
+    /** RESUMED arrived; Quick Share opens the moment the NFC link drops. */
+    @Volatile private var pendingAppleLinkAt = -1_000_000L
+    /** Set by the app: whether the iPhone link helper can carry a swap right now (see AppleLink). */
+    @Volatile var appleLinkReady: () -> Boolean = { false }
+    /** Set by the app: try to start the iPhone link helper (it wasn't running when an iPhone tapped). */
+    @Volatile var startAppleLink: () -> Unit = {}
+    /** Set by the app: the link helper's counters, logged after each swap in testing mode (blocking; IO only). */
+    @Volatile var swapDiagnostics: (() -> String?)? = null
+    private var appleLinkWatchdog: Job? = null
+    @Volatile private var appleLinkStartedAt = 0L
+    @Volatile private var appleLinkUpAt = 0L
+    @Volatile private var iphoneConnectedAt = 0L
+    /** Whether the cover is showing for the current swap. */
+    @Volatile private var swapCovered = false
     private var lastRefusalLogAt = -1_000_000L
     private val nfcState = context.getSharedPreferences("daptap_nfc", Context.MODE_PRIVATE)
     /** This phone's NFC chip has reported an iPhone's polling frames at least once, so they can be relied on. */
@@ -123,23 +150,35 @@ class TapEngine(
         val pkcs8 = checkNotNull(com.keshav.daptap.nfc.SnapKeys.privateKey(context)) { "no NameDrop key" }
         val key = java.security.KeyFactory.getInstance("EC").generatePrivate(java.security.spec.PKCS8EncodedKeySpec(pkcs8))
         com.keshav.daptap.namedrop.NameDropServer(id.spki, key, id.uuidString.lowercase() + ".local",
-            com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log, onDone = ::finishAppleLink), ::log) { relaySocketProvider?.invoke() }
+            com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log),
+            ::log,
+            relaySocket = { relaySocketProvider?.invoke() },
+            onConnected = { onIphoneConnected(); swapId },
+            onRequest = { path -> mark(path.trim('/').lowercase()) },
+            onFinished = { why, id -> if (id == swapId) finishAppleLink(why) else log("NameDrop: an earlier connection ended ($why); ignored") },
+            verbose = { prefs.settings.value.testingMode },
+        )
     }
     /** Set by the app: a socket through the iPhone link helper when it's running. */
     @Volatile var relaySocketProvider: (() -> java.net.DatagramSocket?)? = null
 
+    /** Server starts and stops run one at a time, in order, so a stale stop can't undo a newer start. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val serverDispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(1)
+
     /** The link helper just came up: move the server onto it. */
     fun restartNameDropServer() {
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { nameDropServer.restart() } }
+        scope.launch(serverDispatcher) { runCatching { nameDropServer.restart() } }
     }
 
     private fun startNameDropServer() {
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { nameDropServer.start() }.onFailure { log("NameDrop server: ${it.message}") } }
+        scope.launch(serverDispatcher) { runCatching { nameDropServer.start() }.onFailure { log("NameDrop server: ${it.message}") } }
     }
 
     private fun stopNameDropServer() {
-        // Off the main thread: stopping waits for open connections to close.
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { nameDropServer.stop() } }
+        // Off the main thread: stopping waits for open connections to close. Re-checked when it runs, so a stop
+        // queued behind a newer start (DapTap paused and resumed) does nothing.
+        scope.launch(serverDispatcher) { if (!beaconActive && !peerLinkUp) runCatching { nameDropServer.stop() } }
     }
 
     /** The Apple link has an Android network: send the exchange server's replies through it. */
@@ -149,39 +188,58 @@ class TapEngine(
         }
     }
 
+    /** Our card as the iPhone gets it in /Ask and /Exchange, built once per card/photo change. */
+    @Volatile private var nameDropCardCache: Pair<String, com.keshav.daptap.namedrop.Exchange.Card>? = null
+
     /** Our card as the iPhone gets it in /Exchange: a vCard with the photo, CRLF line ends. */
     private fun nameDropCard(): com.keshav.daptap.namedrop.Exchange.Card {
         val card = prefs.card.value
+        val key = "${card.hashCode()}|${prefs.photoVersion.value}"
+        nameDropCardCache?.takeIf { it.first == key }?.let { return it.second }
         val photo = Photos.readMine(context)?.let { Photos.thumbnail(it, NAMEDROP_PHOTO_PX, NAMEDROP_PHOTO_MAX) }
         val text = VCard.write(card, photo).replace("\r\n", "\n").replace("\n", "\r\n")
         return com.keshav.daptap.namedrop.Exchange.Card(card.name.ifBlank { "DapTap" }, card.email.ifBlank { null },
-            card.phone.ifBlank { null }, text.toByteArray(Charsets.UTF_8))
+            card.phone.ifBlank { null }, text.toByteArray(Charsets.UTF_8)).also { nameDropCardCache = key to it }
     }
 
-    /** The iPhone's card arrived over NameDrop (server thread). */
+    /** The iPhone's card arrived over NameDrop (server thread). Everything heavy happens off the main thread. */
     private fun onNameDropCard(vcard: ByteArray, fullName: String?) {
-        val parsed = VCard.parse(String(vcard, Charsets.UTF_8))
-        scope.launch {
+        mark("card")
+        scope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            val text = String(vcard, Charsets.UTF_8)
+            val parsed = VCard.parse(text)
             if (parsed == null) { log("NameDrop: couldn't read the iPhone's card (${vcard.size} B)"); return@launch }
-            // Which vCard properties the iPhone sent (names and sizes only), for debugging.
-            log("NameDrop: card properties " + String(vcard, Charsets.UTF_8).lineSequence()
-                .filter { it.isNotEmpty() && !it[0].isWhitespace() && it.contains(':') }
-                .map { it.substringBefore(':').substringBefore(';') + "(" + it.substringAfter(':').length + ")" }
-                .joinToString(" ").take(600))
-            // An iPhone may send its card without a name (iOS can keep it only on the Contact Poster): look
-            // there, then fall back to the name it gave the exchange.
-            val poster = if (parsed.card.name.isBlank()) runCatching { PosterName.inspect(String(vcard, Charsets.UTF_8)) }
-                .onFailure { log("NameDrop: couldn't read the poster (${it.javaClass.simpleName})") }.getOrNull() else null
-            poster?.let { r ->
-                log("NameDrop: poster outline follows (${r.description.length} chars), name found: ${r.name ?: "none"}")
-                r.description.lineSequence().filter { it.isNotBlank() }.forEach { log("  poster| $it") }
+            val testing = prefs.settings.value.testingMode
+            if (testing) {
+                // Which vCard properties the iPhone sent (names and sizes only), for debugging.
+                log("NameDrop: card properties " + text.lineSequence()
+                    .filter { it.isNotEmpty() && !it[0].isWhitespace() && it.contains(':') }
+                    .map { it.substringBefore(':').substringBefore(';') + "(" + (it.length - it.indexOf(':') - 1) + ")" }
+                    .joinToString(" ").take(600))
             }
-            val fallback = poster?.name ?: fullName
-            val card = if (parsed.card.name.isBlank() && !fallback.isNullOrBlank()) parsed.card.copy(name = fallback) else parsed.card
-            log("NameDrop: got ${card.name.ifBlank { "a card without a name" }} from the iPhone")
-            receiveVCard(card, parsed.photo, "namedrop")
+            // iOS sends no name when the sender's own card has none (the Contact Poster never carries it): fall
+            // back to the name the exchange gave, and the user can add one.
+            val card = if (parsed.card.name.isBlank() && !fullName.isNullOrBlank()) parsed.card.copy(name = fullName) else parsed.card
+            val photo = prepareIncomingPhoto(parsed.photo)
+            val person = if (card.isEmpty) null else history.add(card.sanitized(), photo, "namedrop")
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                log("NameDrop: got ${card.name.ifBlank { "a card without a name" }} from the iPhone")
+                if (person != null) show(person, photo, null, false, "namedrop")
+                mark("shown")
+            }
+            if (testing && parsed.card.name.isBlank()) {
+                // Testing mode: what the poster holds, capped so it can't push the tap's timing out of the log.
+                runCatching { PosterName.inspect(text) }.getOrNull()?.let { r ->
+                    val lines = r.description.lineSequence().filter { it.isNotBlank() }.toList()
+                    log("NameDrop: poster outline (${lines.size} lines${if (lines.size > POSTER_LOG_LINES) ", first $POSTER_LOG_LINES" else ""}), name found: ${r.name ?: "none"}")
+                    lines.take(POSTER_LOG_LINES).forEach { log("  poster| $it") }
+                }
+            }
         }
     }
+
+    /** A received photo scaled for history and the screen; null when it isn't an image we can decode. */
+    private fun prepareIncomingPhoto(photo: ByteArray?): ByteArray? = photo?.let { Photos.thumbnail(it, 720, 400_000) }
     private var probeStopJob: Job? = null
 
     private var cachedMessage: ByteArray? = null
@@ -286,11 +344,16 @@ class TapEngine(
         if (on) {
             startNameDropServer()
         } else {
-            // Keep listening a little after a handshake: the iPhone connects only once Share is tapped there.
-            val keep = (nameDropDoneAt + PROBE_AFTER_NAMEDROP_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0)
+            // Keep listening a little after a handshake: the iPhone connects only once Share is tapped there. Never
+            // stop at once, so a quick pause/resume (or Quick Share opening mid-handshake) doesn't drop the server.
+            val keep = (maxOf(nameDropDoneAt, nameDropStartedAt) + PROBE_AFTER_NAMEDROP_MS - SystemClock.elapsedRealtime())
+                .coerceAtLeast(SERVER_LINGER_MS)
             probeStopJob = scope.launch { delay(keep); if (!beaconActive && !peerLinkUp) stopNameDropServer() }
         }
     }
+
+    /** The beacon was switched on or off as a whole (DapTap came to the front or left it). */
+    fun setBeaconEnabled(on: Boolean) { beaconEnabled = on }
 
     /** An iPhone is running (or just ran) NameDrop with us: don't touch it from the reader side. */
     fun iphoneNearby(): Boolean = SystemClock.elapsedRealtime() - maxOf(lastAppleFrameAt, nameDropStartedAt) < 10_000
@@ -298,49 +361,113 @@ class TapEngine(
     /** The NFC link dropped while the iPhone had the NameDrop applet selected. */
     fun onNameDropLinkEnded(reason: Int) {
         log("NameDrop: NFC link ended (${if (reason == 0) "lost: phones moved or field dropped" else "iPhone deselected us"})")
+        // The handshake just finished and the NFC exchange is over: open Quick Share now, not after a fixed wait.
+        if (SystemClock.elapsedRealtime() - pendingAppleLinkAt < 2_000) {
+            pendingAppleLinkAt = -1_000_000L
+            bringUpAppleLink()
+        }
     }
 
     /**
-     * Experiment: only Quick Share brings up the phone's Apple link (mosey0), and the iPhone looks for us on it
-     * once Share is tapped. Open Quick Share right after the handshake so the link is up by then.
+     * Only Quick Share brings up the phone's Apple link (mosey0), and the iPhone looks for us on it. DapTap covers
+     * Quick Share with its own screen until the swap is over.
      */
-    @Volatile private var returnWhenLinkUp = false
-
-    /** The Apple link's network appeared. Without the cover, bring DapTap back over Quick Share now. */
+    /** The Apple link's network appeared. */
     fun onAppleLinkUp() {
-        if (!returnWhenLinkUp) return
-        returnWhenLinkUp = false
-        scope.launch { delay(1_500); bringDapTapForward(); log("Apple link is up; brought DapTap back over Quick Share") }
+        if (appleLinkStartedAt == 0L || appleLinkUpAt != 0L) return
+        appleLinkUpAt = SystemClock.elapsedRealtime()
+        mark("link")
     }
 
-    /** The NameDrop exchange is over (card received or not): show DapTap again and drop the cover. */
-    private fun finishAppleLink() {
-        returnWhenLinkUp = false
+    /** The iPhone opened its QUIC connection to us (server thread). */
+    private fun onIphoneConnected() {
+        iphoneConnectedAt = SystemClock.elapsedRealtime()
+        mark("connected")
+    }
+
+    /** Each swap's number: a connection from an earlier swap can't end this one. */
+    @Volatile private var swapId = 0
+
+    /** The user cancelled the swap on the cover. */
+    fun cancelAppleLink() = finishAppleLink("cancelled")
+
+    /** The NameDrop swap is over (our reply delivered, or given up): show DapTap again and drop the cover. */
+    private fun finishAppleLink(why: String) {
+        // Whatever is still connected belongs to the swap that just ended.
+        if (why != "exchange finished") scope.launch(serverDispatcher) { runCatching { nameDropServer.closeConnections() } }
         scope.launch {
-            bringDapTapForward()
-            delay(400) // DapTap first, then uncover, so Quick Share never flashes
-            feedback.coverAppleLink(false)
+            appleLinkWatchdog?.cancel()
+            appleLinkWatchdog = null
+            val wasActive = appleLinkStartedAt != 0L
+            appleLinkStartedAt = 0L
+            appleLinkFinishedAt = SystemClock.elapsedRealtime()
+            if (!wasActive) return@launch
+            mark("done")
+            log("NameDrop: swap over ($why)")
+            logTimeline()
+            if (prefs.settings.value.testingMode) launch(kotlinx.coroutines.Dispatchers.IO) { swapDiagnostics?.invoke()?.let(::log) }
+            if (swapCovered) {
+                // DapTap comes forward under the cover; the cover goes once DapTap has drawn (see onAppShown),
+                // or after a short fallback, so Quick Share never flashes.
+                uncoverPending = true
+                feedback.bringAppForward()
+                delay(UNCOVER_FALLBACK_MS)
+                if (uncoverPending) uncover()
+            } else {
+                feedback.bringAppForward()
+            }
         }
     }
 
-    private fun bringDapTapForward() {
-        runCatching {
-            context.startActivity(android.content.Intent(context, com.keshav.daptap.MainActivity::class.java)
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
-        }
+    @Volatile private var uncoverPending = false
+
+    /** MainActivity drew its first frame after coming back: safe to remove the cover now. */
+    fun onAppShown() { if (uncoverPending) scope.launch { uncover() } }
+
+    private fun uncover() {
+        uncoverPending = false
+        swapCovered = false
+        feedback.coverAppleLink(false)
     }
 
     private fun bringUpAppleLink() {
-        scope.launch {
-            delay(400) // let the NFC exchange close first
-            // Quick Share only raises the Apple link while it's on screen. DapTap covers it with its own view so the
-            // user never sees Quick Share; without the overlay permission, DapTap comes back once the link is up.
-            val covered = runCatching { feedback.coverAppleLink(true) }.getOrDefault(false)
-            returnWhenLinkUp = !covered
-            val opened = runCatching { feedback.launchQuickShare(prefs.card.value, Photos.readMine(context)) }.getOrDefault(false)
-            log(if (opened) "opened Quick Share to bring up the Apple link (${if (covered) "covered by DapTap" else "DapTap returns once the link is up"})"
-                else "couldn't open Quick Share for the Apple link")
-            if (!opened) { feedback.coverAppleLink(false); returnWhenLinkUp = false }
+        if (!appleLinkReady()) {
+            // Without the helper, replies can't reach the iPhone (broadcast replies were tested and fail): don't
+            // open Quick Share for nothing. Say what's missing and try to start the helper for the next tap.
+            log("NameDrop: the iPhone link isn't running, so the swap can't finish; starting it for the next tap")
+            _events.tryEmit("Turn on the iPhone link in Settings to swap with iPhones")
+            startAppleLink()
+            return
+        }
+        swapId++
+        appleLinkStartedAt = SystemClock.elapsedRealtime()
+        appleLinkUpAt = 0L
+        iphoneConnectedAt = 0L
+        mark("quickshare")
+        // Quick Share only raises the Apple link while it's on screen. DapTap covers it with its own view so the
+        // user never sees Quick Share; without the overlay permission Quick Share stays visible until the swap ends.
+        val covered = runCatching { feedback.coverAppleLink(true) }.getOrDefault(false)
+        swapCovered = covered
+        val opened = runCatching { feedback.launchQuickShare(prefs.card.value, null) }.getOrDefault(false)
+        log(if (opened) "opened Quick Share to bring up the Apple link (${if (covered) "covered by DapTap" else "no overlay permission: Quick Share stays visible"})"
+            else "couldn't open Quick Share for the Apple link")
+        if (!opened) { appleLinkStartedAt = 0L; uncover(); return }
+        // Give up (and come back to DapTap) if the link or the iPhone never shows: the user walked away, or the
+        // iPhone took Receive Only and never connected. Once connected, the iPhone's Share tap can take a while.
+        appleLinkWatchdog?.cancel()
+        val started = appleLinkStartedAt
+        appleLinkWatchdog = scope.launch {
+            while (appleLinkStartedAt == started) {
+                delay(500)
+                val now = SystemClock.elapsedRealtime()
+                val why = when {
+                    appleLinkUpAt == 0L && iphoneConnectedAt == 0L && now - started > LINK_UP_TIMEOUT_MS -> "the Apple link never came up"
+                    appleLinkUpAt != 0L && iphoneConnectedAt == 0L && now - appleLinkUpAt > CONNECT_TIMEOUT_MS -> "the iPhone never connected"
+                    now - started > SWAP_TIMEOUT_MS -> "timed out waiting for the iPhone's Share"
+                    else -> null
+                }
+                if (why != null) { finishAppleLink(why); break }
+            }
         }
     }
 
@@ -356,54 +483,106 @@ class TapEngine(
     }
     @Volatile private var peerLinkUp = false
 
-    /** A DapTap phone was just read or pushed to us: let that exchange finish before the next frame. */
-    fun beaconOnHold(): Boolean = SystemClock.elapsedRealtime() - maxOf(lastPeerTagAt, lastPushAt) < 2_500
+    /**
+     * No NameDrop frame now: a DapTap phone was just read or pushed to us, an iPhone is mid-handshake (a frame
+     * in the 0.9 s redirect gap would tear down the resume), or a swap just ended with the phones still together.
+     */
+    fun beaconOnHold(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val peer = now - maxOf(lastPeerTagAt, lastPushAt) < 2_500
+        val handshake = nameDropStartedAt > nameDropDoneAt && now - nameDropStartedAt < 3_000
+        val justDone = now - maxOf(nameDropDoneAt, appleLinkFinishedAt) < 5_000
+        return peer || handshake || justDone
+    }
 
     /**
      * Whether a reader should be turned away from our NDEF tag. While the beacon runs, an iPhone tries a tag
      * read before it starts NameDrop; answering it makes iOS stop at the tag read. DapTap readers identify
      * themselves and are never refused; the opt-in web card needs the tag read, so it disables this.
-     * Where the chip reports Apple frames, only a reader seen sending them (an iPhone) is refused.
+     * Where the chip reports Apple frames, only a reader seen sending them (an iPhone) is refused. While the beacon
+     * rests the iPhone is still turned away, and the refusal wakes the beacon.
      */
     fun refuseNdef(daptapReader: Boolean): Boolean {
-        if (daptapReader || !beaconActive || prefs.settings.value.webFallback) return false
+        if (daptapReader || prefs.settings.value.webFallback) return false
         val now = SystemClock.elapsedRealtime()
-        if (now - lastAppleFrameAt < 3_000 || now - nameDropStartedAt < 10_000) return true
-        return !framesReliable
+        // Mid-NameDrop (including after Quick Share has taken the screen and the beacon has stopped), the iPhone
+        // retries a tag read; it must keep being turned away, as 1.0.32 did.
+        if (now - nameDropStartedAt < 10_000 || appleLinkStartedAt != 0L) return true
+        if (beaconEnabled && now - lastAppleFrameAt < 3_000) return true
+        return beaconActive && !framesReliable
     }
 
     fun onNdefRefused() {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastRefusalLogAt > 2_000) log("turned the tag read away so the iPhone moves on to NameDrop")
+        refusedThisActivation = true
+        if (now - lastRefusalLogAt > 2_000) {
+            log("turned the tag read away so the iPhone moves on to NameDrop")
+            mark("refused")
+        }
         lastRefusalLogAt = now
     }
 
-    /** Progress of the NameDrop handshake with an iPhone (HCE thread = main thread). */
+    /** Progress of the NameDrop handshake with an iPhone (HCE thread = main thread). Kept short: the iPhone waits. */
     fun onSnap(event: com.keshav.daptap.core.SnapApplet.Event, detail: String, peerUuid: String?, peerLabel: String?) {
         val now = SystemClock.elapsedRealtime()
-        log("NameDrop: $detail")
         when (event) {
             com.keshav.daptap.core.SnapApplet.Event.BOOP_SELECTED -> {
-                if (now - nameDropStartedAt > 10_000) log("iPhone started NameDrop with us")
+                val fresh = now - nameDropStartedAt > 10_000
                 nameDropStartedAt = now
                 lastAppleFrameAt = now
-                iphoneTouch()
-            }
-            com.keshav.daptap.core.SnapApplet.Event.SERVER_INFO -> {
-                nameDropStartedAt = now
-                log("NameDrop: iPhone listener $peerUuid, service ${peerLabel ?: "?"}")
-            }
-            com.keshav.daptap.core.SnapApplet.Event.RESUMED -> {
-                if (now - nameDropDoneAt > 10_000) {
-                    log("NameDrop handshake complete: the iPhone should show its NameDrop card now")
-                    _events.tryEmit("NameDrop started on the iPhone")
-                    if (prefs.settings.value.testingMode) bringUpAppleLink()
+                if (fresh) mark("boop")
+                later {
+                    log("NameDrop: $detail")
+                    if (fresh) {
+                        log("iPhone started NameDrop with us")
+                        beaconHistory?.invoke()?.let { log("NameDrop beacon: $it") }
+                        // Get Quick Share's card file and intent ready while the handshake runs.
+                        val card = prefs.card.value
+                        launch(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching { feedback.prepareQuickShare(card, Photos.readMine(context)) }
+                            runCatching { nameDropCard() }
+                        }
+                    }
+                    iphoneTouch()
                 }
+                return
+            }
+            com.keshav.daptap.core.SnapApplet.Event.SERVER_INFO -> nameDropStartedAt = now
+            com.keshav.daptap.core.SnapApplet.Event.RESUMED -> {
+                val busy = appleLinkStartedAt != 0L
+                val fresh = now - nameDropDoneAt > 10_000 && !busy
                 nameDropDoneAt = now
+                if (busy) later { log("NameDrop: handshake again while a swap is still running; carrying on with that one") }
+                if (fresh) {
+                    mark("resumed")
+                    // Quick Share opens the moment the iPhone lets go of the NFC link (onNameDropLinkEnded); this
+                    // fallback covers a link loss Android never reports.
+                    pendingAppleLinkAt = now
+                    scope.launch {
+                        delay(APPLE_LINK_FALLBACK_MS)
+                        if (pendingAppleLinkAt == now) { pendingAppleLinkAt = -1_000_000L; bringUpAppleLink() }
+                    }
+                }
+                later {
+                    log("NameDrop: $detail")
+                    if (fresh) {
+                        log("NameDrop handshake complete: the iPhone should show its NameDrop card now")
+                        _events.tryEmit("NameDrop started on the iPhone")
+                    }
+                }
+                return
             }
             else -> {}
         }
+        later {
+            log("NameDrop: $detail")
+            if (event == com.keshav.daptap.core.SnapApplet.Event.SERVER_INFO) log("NameDrop: iPhone listener $peerUuid, service ${peerLabel ?: "?"}")
+        }
     }
+
+    /** Runs [block] on the main thread after the current work (an HCE response) has returned. */
+    private fun later(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) =
+        scope.launch(kotlinx.coroutines.Dispatchers.Main, block = block)
 
     /** Something touched us in the beacon's reader phase that isn't a DapTap phone. */
     fun onForeignTagInReaderPhase() {
@@ -443,12 +622,44 @@ class TapEngine(
         scope.launch { decide(now, session) }
     }
 
-    fun onDeactivated() {
+    /** The NFC link to a reader ended. [boopSelected]: it was an iPhone's NameDrop handshake. */
+    fun onDeactivated(boopSelected: Boolean = false) {
+        // We just turned an iPhone's tag read away: it now needs our NameDrop frame, so send one straight away
+        // instead of waiting out the rest of the beacon's card phase.
+        if (refusedThisActivation && !boopSelected && !beaconOnHold()) beaconKick?.invoke()
+        refusedThisActivation = false
         scheduleReset(1_500)
     }
 
+    /** Logged after the response went back (posted), so the reader never waits on it. */
     fun logApdu(command: ByteArray, response: ByteArray) {
-        if (BuildConfig.DEBUG || _log.value.size < 400) log("> ${hex(command)}  < ${hex(response.takeLast(2).toByteArray())}")
+        if (BuildConfig.DEBUG || prefs.settings.value.testingMode) {
+            val sw = response.takeLast(2).toByteArray()
+            mainHandler.post { log("> ${hex(command)}  < ${hex(sw)}") }
+        }
+    }
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // ---------------------------------------------------------------- tap timeline
+
+    private val marks = ArrayList<Pair<String, Long>>()
+
+    /** Notes when a step of the current tap happened, for one timing line per swap (any thread). */
+    fun mark(what: String) {
+        val now = SystemClock.elapsedRealtime()
+        synchronized(marks) {
+            if (marks.isEmpty() || now - marks.last().second > 30_000) marks.clear()
+            marks += what to now
+        }
+    }
+
+    private fun logTimeline() {
+        val line = synchronized(marks) {
+            if (marks.isEmpty()) return
+            val t0 = marks.first().second
+            marks.joinToString(" · ") { (w, t) -> "$w +%.2f".format(Locale.US, (t - t0) / 1000.0) }
+        }
+        log("timeline: $line")
     }
 
     private suspend fun decide(readAt: Long, served: Relay.Session) {
@@ -467,7 +678,7 @@ class TapEngine(
         }
         log("decided peer=$peer (apple frames: $appleSeen)")
         var nameDropEngaged = false
-        if (peer == Peer.IPHONE && beaconActive) {
+        if (peer == Peer.IPHONE && beaconEnabled) {
             // The iPhone runs NameDrop with us next. Anything that takes the screen now (Quick Share) would stop
             // the beacon and the card, so wait for the handshake first.
             val started = withTimeoutOrNull(NAMEDROP_START_WAIT_MS) {
@@ -529,11 +740,14 @@ class TapEngine(
     /** A vCard arrived (AirDropped from an iPhone through Quick Share, or shared into DapTap). */
     fun receiveVCard(card: ContactCard, photo: ByteArray?, via: String) {
         if (card.isEmpty) return
-        present(card.sanitized(), photo?.let { Photos.thumbnail(it, 720, 400_000) ?: it }, null, via)
+        // A photo that doesn't decode (an iPhone's PHOTO can be a reference, not an image) is dropped.
+        present(card.sanitized(), prepareIncomingPhoto(photo), null, via)
     }
 
-    private fun present(card: ContactCard, photo: ByteArray?, replyTo: Relay.Session?, via: String, theyHaveOurs: Boolean = false) {
-        val person = history.add(card, photo, via)
+    private fun present(card: ContactCard, photo: ByteArray?, replyTo: Relay.Session?, via: String, theyHaveOurs: Boolean = false) =
+        show(history.add(card, photo, via), photo, replyTo, theyHaveOurs, via)
+
+    private fun show(person: Person, photo: ByteArray?, replyTo: Relay.Session?, theyHaveOurs: Boolean, via: String) {
         val current = _incoming.value
         // The same person read twice during one hold: keep the screen, just refresh the photo.
         if (current != null && current.person.id == person.id) {
@@ -543,6 +757,8 @@ class TapEngine(
         }
         _incoming.value = Incoming(person, photo, replyTo, sharedBack = theyHaveOurs)
         feedback.received()
+        // During an iPhone swap the cover shows the card at once (DapTap comes forward when the swap ends).
+        if (via == "namedrop" && swapCovered && feedback.coverCard(person, photo)) return
         if (!feedback.appInForeground()) feedback.notifyIncoming(person)
     }
 
@@ -639,10 +855,11 @@ class TapEngine(
 
     // ---------------------------------------------------------------- diagnostics
 
-    private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    /** Thread-safe (kwik, h3 workers, binder and main threads all log). */
+    private val timeFmt = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS", Locale.US)
 
     fun log(line: String) {
-        val entry = timeFmt.format(Date()) + "  " + line
+        val entry = java.time.LocalTime.now().format(timeFmt) + "  " + line
         _log.update { (it + entry).takeLast(LOG_MAX) }
         // Also to logcat (release too), so the tap log can be read over adb while testing with a real iPhone.
         android.util.Log.i("DapTap", line)
@@ -661,6 +878,18 @@ class TapEngine(
         const val NAMEDROP_PHOTO_PX = 400
         const val NAMEDROP_PHOTO_MAX = 60_000
         const val PROBE_AFTER_NAMEDROP_MS = 90_000L
+        /** The server never stops sooner than this after DapTap leaves the screen. */
+        const val SERVER_LINGER_MS = 5_000L
+        /** If RESUMED's NFC link loss never gets reported, Quick Share opens after this anyway. */
+        const val APPLE_LINK_FALLBACK_MS = 300L
+        /** The cover comes off this long after DapTap is brought back, if DapTap's first frame isn't reported. */
+        const val UNCOVER_FALLBACK_MS = 700L
+        /** Give up a swap if Quick Share doesn't bring up the Apple link, or the iPhone doesn't connect, in time. */
+        const val LINK_UP_TIMEOUT_MS = 10_000L
+        const val CONNECT_TIMEOUT_MS = 20_000L
+        const val SWAP_TIMEOUT_MS = 75_000L
+        /** Testing mode logs this much of an iPhone's Contact Poster outline. */
+        const val POSTER_LOG_LINES = 150
         const val ACTION_DEBOUNCE_MS = 8_000L
         const val TOUCH_TIMEOUT_MS = 4_000L
         const val SENT_HOLD_MS = 6_000L
@@ -674,6 +903,11 @@ class TapEngine(
         const val RELAY_PHOTO_MAX = 2_000
         const val LOG_MAX = 1500
 
-        fun hex(b: ByteArray) = b.joinToString("") { "%02X".format(it) }
+        private val HEX = "0123456789ABCDEF".toCharArray()
+        fun hex(b: ByteArray): String {
+            val out = CharArray(b.size * 2)
+            b.forEachIndexed { i, x -> out[2 * i] = HEX[(x.toInt() shr 4) and 0xF]; out[2 * i + 1] = HEX[x.toInt() and 0xF] }
+            return String(out)
+        }
     }
 }

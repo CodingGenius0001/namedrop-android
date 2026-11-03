@@ -28,6 +28,8 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     private val token: ByteArray = prefs.getString("token", null)?.let(LinkHelper::hex)
         ?: ByteArray(16).also { SecureRandom().nextBytes(it); prefs.edit().putString("token", hex(it)).apply() }
     val helper = HelperLink(token)
+    /** The running helper is from an older DapTap: it works, but [start] should replace it when it can. */
+    @Volatile var outdated = false; private set
     private val lock = Mutex()
 
     private val _state = MutableStateFlow(State(if (supported) Phase.STOPPED else Phase.UNSUPPORTED))
@@ -45,7 +47,9 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {
         if (!supported) return@withContext false
         val s = helper.ping()
-        val ok = s != null && s.protocol == LinkHelper.PROTOCOL
+        // A helper from an older DapTap still relays (same wire format since protocol 2); start() upgrades it.
+        val ok = s != null && s.protocol in LinkHelper.MIN_COMPATIBLE..LinkHelper.PROTOCOL
+        outdated = ok && s!!.protocol < LinkHelper.PROTOCOL
         if (_state.value.phase != Phase.STARTING) {
             _state.value = when {
                 !enabled && paired -> State(Phase.OFF)
@@ -69,10 +73,10 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
         withContext(Dispatchers.IO) {
             if (!supported) return@withContext Result.failure(IllegalStateException("Needs Android 11 or newer"))
             if (!enabled) { _state.value = State(Phase.OFF); return@withContext Result.failure(IllegalStateException("turned off")) }
-            helper.ping()?.let { s ->
-                if (s.protocol == LinkHelper.PROTOCOL) { _state.value = State(Phase.RUNNING); return@withContext Result.success("already running") }
-                helper.stop() // an older helper from a previous DapTap version
-            }
+            // An older helper keeps running (and relaying) until its replacement is launched: the launch command
+            // replaces it, so a failed launch never leaves the phone without one.
+            val before = helper.ping()
+            if (before != null && before.protocol == LinkHelper.PROTOCOL) { _state.value = State(Phase.RUNNING); return@withContext Result.success("already running") }
             if (!paired) { _state.value = State(Phase.NOT_PAIRED); return@withContext Result.failure(IllegalStateException("not paired")) }
             _state.value = State(Phase.STARTING, "Starting the iPhone link…")
             val resolver = context.contentResolver
@@ -119,12 +123,20 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
             }
             if (switchedOn) runCatching { Settings.Global.putInt(resolver, ADB_WIFI, 0) }
             result.onSuccess {
+                outdated = false
                 log("iPhone link: helper $it")
                 _state.value = State(Phase.RUNNING)
                 onHelperUp()
             }.onFailure {
                 log("iPhone link: couldn't start the helper (${it.message})")
-                _state.value = State(if (paired) Phase.STOPPED else Phase.NOT_PAIRED, it.message)
+                val old = helper.ping()
+                if (old != null && old.protocol in LinkHelper.MIN_COMPATIBLE..LinkHelper.PROTOCOL) {
+                    log("iPhone link: keeping the running helper (protocol ${old.protocol})")
+                    outdated = old.protocol < LinkHelper.PROTOCOL
+                    _state.value = State(Phase.RUNNING)
+                } else {
+                    _state.value = State(if (paired) Phase.STOPPED else Phase.NOT_PAIRED, it.message)
+                }
             }
         }
     }

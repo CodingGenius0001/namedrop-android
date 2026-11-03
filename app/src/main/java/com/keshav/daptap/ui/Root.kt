@@ -88,7 +88,6 @@ fun DapTapRoot(app: DapTapApp) {
     val people by app.history.people.collectAsState()
     val incoming by app.engine.incoming.collectAsState()
     val phase by app.engine.phase.collectAsState()
-    val log by app.engine.log.collectAsState()
 
     var myPhotoBytes by remember { mutableStateOf<ByteArray?>(null) }
     LaunchedEffect(photoVersion) { myPhotoBytes = withContext(Dispatchers.IO) { Photos.readMine(app) } }
@@ -372,7 +371,7 @@ fun DapTapRoot(app: DapTapApp) {
                         },
                         settings = { padding ->
                             SettingsScreen(
-                                settings, status, log, padding,
+                                settings, status, app.engine.log, padding,
                                 SettingsActions(
                                     update = { app.prefs.updateSettings(it) },
                                     openNfc = { context.openSettings(Settings.ACTION_NFC_SETTINGS) },
@@ -385,7 +384,7 @@ fun DapTapRoot(app: DapTapApp) {
                                     requestNotifications = ::requestNotifications,
                                     copyLog = {
                                         context.getSystemService(ClipboardManager::class.java)
-                                            ?.setPrimaryClip(ClipData.newPlainText("DapTap log", log.joinToString("\n")))
+                                            ?.setPrimaryClip(ClipData.newPlainText("DapTap log", app.engine.log.value.joinToString("\n")))
                                     },
                                     clearLog = { app.engine.clearLog() },
                                     testCode = app.logUploader.code,

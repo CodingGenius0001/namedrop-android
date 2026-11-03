@@ -13,6 +13,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -70,7 +72,7 @@ class OverlayController(private val app: DapTapApp) {
         data class Tap(val phase: TapEngine.Phase, val ground: Ground, val seq: Long) : OverlayContent
         data class Card(val person: Person, val ground: Ground) : OverlayContent
         /** Full screen, over Quick Share while it holds the Apple link up for an iPhone swap. */
-        data class Cover(val ground: Ground) : OverlayContent
+        data class Cover(val ground: Ground, val person: Person? = null, val photo: androidx.compose.ui.graphics.ImageBitmap? = null) : OverlayContent
     }
     private val covering get() = content.value is OverlayContent.Cover
 
@@ -78,10 +80,18 @@ class OverlayController(private val app: DapTapApp) {
         detach()
         content.value = OverlayContent.Cover(Grounds.of(app.prefs.card.value.label))
         attach(fullScreen = true)
-        scheduleHide(COVER_MAX_MS) { openApp() }
+        scheduleHide(COVER_MAX_MS) { cancelSwap() }
     }
 
     fun hideCover() { if (covering) detach() }
+
+    /** The iPhone's card arrived mid-swap: show it on the cover now (DapTap comes forward once the swap ends). */
+    fun showCoverCard(person: Person, photo: ByteArray?): Boolean {
+        val c = content.value as? OverlayContent.Cover ?: return false
+        val bitmap = photo?.let { runCatching { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }.getOrNull() }
+        content.value = c.copy(person = person, photo = bitmap)
+        return true
+    }
 
     fun show(phase: TapEngine.Phase) {
         if (covering) return
@@ -133,6 +143,12 @@ class OverlayController(private val app: DapTapApp) {
         content.value = null
     }
 
+    /** Ends the swap in the engine (which brings DapTap back and takes the cover down), and opens DapTap. */
+    private fun cancelSwap() {
+        app.engine.cancelAppleLink()
+        openApp()
+    }
+
     private fun openApp() {
         detach()
         runCatching {
@@ -154,17 +170,33 @@ class OverlayController(private val app: DapTapApp) {
         }
         Box(Modifier.fillMaxSize().background(ground.color).clickable(enabled = false) {}) {
             ConstructionGrid(12.dp, ground.line, Modifier.matchParentSize(),
-                wave = if (reduce) -1f else wave.value, origin = Offset(0.5f, 0.5f))
+                wave = if (reduce || c.person != null) -1f else wave.value, origin = Offset(0.5f, 0.5f))
             Column(Modifier.align(androidx.compose.ui.Alignment.CenterStart).padding(horizontal = 28.dp)) {
-                CellName("SWAP", ground.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
-                Spacer(Modifier.height(20.dp))
-                Text("Swapping with the iPhone", color = ground.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
-                Text("Ask them to tap Share. Keep the phones close.", color = ground.inkSoft, fontSize = 16.sp, lineHeight = 22.sp)
+                val person = c.person
+                if (person == null) {
+                    CellName("SWAP", ground.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
+                    Spacer(Modifier.height(20.dp))
+                    Text("Swapping with the iPhone", color = ground.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Ask them to tap Share. Keep the phones close.", color = ground.inkSoft, fontSize = 16.sp, lineHeight = 22.sp)
+                } else {
+                    c.photo?.let { img ->
+                        androidx.compose.foundation.Image(img, null, Modifier.height(120.dp).aspectRatio(1f).clip(RoundedCornerShape(24.dp)),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                        Spacer(Modifier.height(20.dp))
+                    }
+                    val first = person.card.firstName.ifBlank { person.card.name }.ifBlank { "GOT IT" }
+                    CellName(first.uppercase(), ground.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
+                    Spacer(Modifier.height(20.dp))
+                    Text(if (person.card.name.isBlank()) "Got their card" else "Got ${person.card.name}'s card",
+                        color = ground.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Finishing the swap…", color = ground.inkSoft, fontSize = 16.sp, lineHeight = 22.sp)
+                }
             }
             Text("Cancel", color = ground.ink, fontSize = 16.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter).navigationBarsPadding()
-                    .padding(bottom = 28.dp).clip(RoundedCornerShape(20.dp)).clickable(onClick = ::openApp)
+                    .padding(bottom = 28.dp).clip(RoundedCornerShape(20.dp)).clickable(onClick = ::cancelSwap)
                     .padding(horizontal = 24.dp, vertical = 12.dp))
         }
     }

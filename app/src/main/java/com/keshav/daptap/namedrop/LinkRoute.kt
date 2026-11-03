@@ -25,6 +25,8 @@ class LinkRoute(private val context: Context, private val log: (String) -> Unit)
     private val known = HashMap<Network, String?>()
     /** Called with the Network that carries a peer-link interface whenever one appears. */
     @Volatile var onPeerNetwork: ((String, Network) -> Unit)? = null
+    /** Called when that network goes away. */
+    @Volatile var onPeerNetworkLost: ((String, Network) -> Unit)? = null
 
     /** Watch every network apps may see, so the Apple link's is caught the moment it appears. */
     fun watch() {
@@ -42,7 +44,10 @@ class LinkRoute(private val context: Context, private val log: (String) -> Unit)
                 override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) = seen(network, lp)
                 override fun onLost(network: Network) {
                     val iface = synchronized(known) { known.remove(network) }
-                    if (iface != null && isPeerLink(iface)) log("route: Android network $network ($iface) lost")
+                    if (iface != null && isPeerLink(iface)) {
+                        log("route: Android network $network ($iface) lost")
+                        onPeerNetworkLost?.invoke(iface, network)
+                    }
                 }
             })
         }.onFailure { log("route: can't watch networks (${it.javaClass.simpleName}: ${it.message})") }

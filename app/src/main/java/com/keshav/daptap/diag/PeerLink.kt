@@ -9,7 +9,7 @@ import java.net.MulticastSocket
 import java.net.NetworkInterface
 
 /**
- * Experiment: Quick Share's AirDrop support on the Galaxy S26 brings up a link-local interface (`mosey0`)
+ * Quick Share's AirDrop support on the Galaxy S26 brings up a link-local interface (`mosey0`)
  * while it talks to an iPhone. This joins mDNS on that interface, logs what the iPhone says there, and
  * announces DapTap's NameDrop listener (`<UUID>._asquic._udp`) on it, answering queries for it. If the
  * iPhone then opens QUIC to us, the Wi-Fi probe's socket (bound on all interfaces) logs it.
@@ -73,30 +73,45 @@ class PeerLink(private val log: (String) -> Unit, private val uuid: () -> String
         }
     }
 
+    /**
+     * Announces our listener the moment the link is up, then quickly a few more times (the iPhone may join the
+     * link a beat later), then every second while the link lasts.
+     */
     private fun announce(s: MulticastSocket, ni: NetworkInterface) {
         var n = 0
+        var announced = false
+        var waitingLogged = false
         while (!s.isClosed) {
             val id = uuid()
             if (id != null) runCatching { send(s, ni, id) }.onFailure {
                 if (n == 0) log("peer link: announce failed (${it.javaClass.simpleName}: ${it.message})")
-            }.onSuccess { if (n == 0) log("peer link: announcing $id._asquic._udp on ${ni.name}") }
+            }.onSuccess { sentIt ->
+                if (sentIt && !announced) { announced = true; log("peer link: announcing $id._asquic._udp on ${ni.name}") }
+                if (!sentIt && !waitingLogged) { waitingLogged = true; log("peer link: ${ni.name} has no link-local address yet; waiting") }
+            }
             n++
-            Thread.sleep(ANNOUNCE_MS)
+            Thread.sleep(SCHEDULE_MS.getOrElse(n - 1) { ANNOUNCE_MS })
         }
     }
 
-    private fun send(s: MulticastSocket, ni: NetworkInterface, id: String) {
-        val addr = ni.inetAddresses.toList().filterIsInstance<Inet6Address>().firstOrNull { it.isLinkLocalAddress } ?: return
+    /** False when the interface has no link-local address yet (looked up fresh: the object passed in is a snapshot). */
+    private fun send(s: MulticastSocket, ni: NetworkInterface, id: String): Boolean {
+        val current = runCatching { NetworkInterface.getByName(ni.name) }.getOrNull() ?: ni
+        val addr = current.inetAddresses.toList().filterIsInstance<Inet6Address>().firstOrNull { it.isLinkLocalAddress } ?: return false
         val bytes = Dns.asquicResponse(id, addr.address, ASQUIC_PORT)
         s.send(DatagramPacket(bytes, bytes.size, Inet6Address.getByAddress(null, InetAddress.getByName("ff02::fb").address, ni), MDNS_PORT))
+        return true
     }
 
-    private fun ownAddress(ni: NetworkInterface, a: InetAddress?) = a != null && ni.inetAddresses.toList().any { it.address.contentEquals(a.address) }
+    private fun ownAddress(ni: NetworkInterface, a: InetAddress?) = a != null &&
+        (runCatching { NetworkInterface.getByName(ni.name) }.getOrNull() ?: ni).inetAddresses.toList().any { it.address.contentEquals(a.address) }
 
     companion object {
         const val MDNS_PORT = 5353
         const val ASQUIC_PORT = 60192
         private const val ANNOUNCE_MS = 1_000L
+        /** Gaps between the first announcements: at 0, 150, 400, 800 and 1500 ms, then every [ANNOUNCE_MS]. */
+        private val SCHEDULE_MS = longArrayOf(150, 250, 400, 700)
 
         /** Interfaces Quick Share's Apple link has been seen as. */
         fun isPeerLink(name: String) = name.startsWith("mosey") || name.startsWith("awdl") || name.startsWith("llw")

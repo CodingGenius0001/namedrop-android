@@ -25,6 +25,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -72,10 +74,12 @@ class SettingsActions(
 fun SettingsScreen(
     settings: Settings,
     status: SystemStatus,
-    log: List<String>,
+    logFlow: kotlinx.coroutines.flow.StateFlow<List<String>>,
     contentPadding: PaddingValues,
     actions: SettingsActions,
 ) {
+    // Collected here, not at the app root: the tap log changes many times a tap and only this screen shows it.
+    val log by logFlow.collectAsState()
     Scaffold(
         topBar = { GroundTopBar("Settings") },
         contentWindowInsets = WindowInsets(0),

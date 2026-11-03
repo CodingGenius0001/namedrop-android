@@ -70,6 +70,20 @@ class AndroidFeedback(private val app: DapTapApp) : TapEngine.Feedback {
         return ok
     }
 
+    override fun prepareQuickShare(card: ContactCard, photo: ByteArray?) = QuickShare.prepare(app, card, photo)
+
+    override fun coverCard(person: Person, photo: ByteArray?): Boolean = overlay.showCoverCard(person, photo)
+
+    override fun bringAppForward() {
+        runCatching {
+            // No window animation: it runs under the cover and only delays DapTap's first frame.
+            val options = android.app.ActivityOptions.makeCustomAnimation(app, 0, 0).toBundle()
+            app.startActivity(android.content.Intent(app, com.keshav.daptap.MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION), options)
+        }
+    }
+
     override fun coverAppleLink(on: Boolean): Boolean {
         if (!on) { overlay.hideCover(); return false }
         if (!Settings.canDrawOverlays(app)) return false

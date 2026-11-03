@@ -73,9 +73,19 @@ object QuickShare {
         return intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 
+    /** An intent built ahead of time ([prepare]), with when, so opening Quick Share during a tap is just a launch. */
+    @Volatile private var prepared: Pair<Long, Intent>? = null
+
+    /** Builds the card file and intent now (off the main thread), for a [launch] moments later. */
+    fun prepare(context: Context, card: ContactCard, photo: ByteArray?) {
+        prepared = android.os.SystemClock.elapsedRealtime() to buildIntent(context, card, photo)
+    }
+
     /** Opens Quick Share with the card. Returns false if nothing could be launched. */
     fun launch(context: Context, card: ContactCard, photo: ByteArray?): Boolean = runCatching {
-        context.startActivity(buildIntent(context, card, photo))
+        val ready = prepared?.takeIf { android.os.SystemClock.elapsedRealtime() - it.first < 60_000 }?.second
+        prepared = null
+        context.startActivity(ready ?: buildIntent(context, card, photo))
         true
     }.getOrElse {
         // Direct component refused (e.g. not exported on this build): fall back to the system sheet.

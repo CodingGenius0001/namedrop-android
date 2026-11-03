@@ -19,17 +19,31 @@ import kotlin.system.exitProcess
  * Messages (UDP on [::1]:[CONTROL_PORT]): "DT" + token(16) + type(1) + body. See [HelperLink] for the app side.
  */
 object LinkHelper {
-    const val PROTOCOL = 2
+    const val PROTOCOL = 3
+    /** Oldest helper whose SEND/RECV/BIND/ATTACH wire format matches: it can still carry a swap. */
+    const val MIN_COMPATIBLE = 2
     const val CONTROL_PORT = 60193
     const val DATA_PORT = 60192
 
     const val ATTACH = 1; const val PING = 2; const val BIND = 3; const val SEND = 4; const val RECV = 5
     const val STOP = 6; const val PROBE = 7
+    /** Helper → app, unasked: something the app should log (a failed send). */
+    const val NOTICE = 8
+    /** Counters: datagrams relayed, sends failed, kernel drops on the NameDrop port. */
+    const val STATS = 9
     const val REPLY = 0x80
 
     @Volatile private var app: SocketAddress? = null
     @Volatile private var data: DatagramSocket? = null
     @Volatile private var lastError = ""
+    @Volatile private var sent = 0L
+    @Volatile private var received = 0L
+    @Volatile private var failed = 0L
+    @Volatile private var retried = 0L
+    private var lastNoticeAt = 0L
+    private var unreported = 0
+    /** Kept short: this runs on the one thread that relays every reply. */
+    private val RETRY_MS = longArrayOf(2, 8)
     /** A network to tie the data socket to, applied by the data thread between receives (see [dataLoop]). */
     private val pendingBind = java.util.concurrent.SynchronousQueue<Long>()
     private val bindResult = java.util.concurrent.SynchronousQueue<String>()
@@ -62,9 +76,10 @@ object LinkHelper {
                 SEND -> {
                     val dst = readAddress(b)
                     val payload = ByteArray(b.remaining()).also { b.get(it) }
-                    runCatching { data?.send(DatagramPacket(payload, payload.size, dst)) }
-                        .onFailure { lastError = "${it.javaClass.simpleName}: ${it.message}" }
+                    send(control, token, DatagramPacket(payload, payload.size, dst))
                 }
+                STATS -> reply(control, token, p.socketAddress, STATS,
+                    "relayed $sent out / $received in, $retried retried, $failed failed, kernel drops ${drops()}".toByteArray())
                 PROBE -> {
                     val handle = b.getLong()
                     val dst = readAddress(b)
@@ -83,6 +98,50 @@ object LinkHelper {
         }
     }
 
+    /**
+     * Sends one datagram to the iPhone. A send can fail for a moment (the link's buffers full, the link being
+     * re-set up); QUIC would only notice after its retransmit timer (~2 s), so retry a few times first, and tell
+     * the app about anything that still fails.
+     */
+    private fun send(control: DatagramSocket, token: ByteArray, p: DatagramPacket) {
+        var attempt = 0
+        while (true) {
+            val e = runCatching { (data ?: throw java.io.IOException("no data socket yet")).send(p) }.exceptionOrNull()
+            if (e == null) { sent++; if (attempt > 0) retried++; return }
+            lastError = "${e.javaClass.simpleName}: ${e.message}"
+            if (attempt >= RETRY_MS.size) {
+                failed++
+                notice(control, token, "send to ${p.socketAddress} failed after ${attempt + 1} tries: $lastError")
+                return
+            }
+            Thread.sleep(RETRY_MS[attempt++])
+        }
+    }
+
+    /** Tells the app (rate-limited: one message per 200 ms, with a count of what was held back). */
+    private fun notice(control: DatagramSocket, token: ByteArray, text: String) {
+        val to = app ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastNoticeAt < 200) { unreported++; return }
+        val msg = if (unreported > 0) "$text (+$unreported more)" else text
+        unreported = 0
+        lastNoticeAt = now
+        val body = msg.take(300).toByteArray()
+        val out = ByteBuffer.allocate(19 + body.size)
+        header(out, token, NOTICE)
+        out.put(body)
+        runCatching { control.send(DatagramPacket(out.array(), out.position(), to)) }
+    }
+
+    /** The kernel's drop counter for UDP sockets on the NameDrop port (the shell user may read it). */
+    private fun drops(): String = runCatching {
+        val port = "%04X".format(DATA_PORT)
+        (java.io.File("/proc/net/udp6").readLines() + java.io.File("/proc/net/udp").readLines())
+            .map { it.trim().split(Regex("\\s+")) }
+            .filter { it.size > 12 && it[1].substringAfter(':') == port }
+            .sumOf { it.last().toLongOrNull() ?: 0L }.toString()
+    }.getOrDefault("?")
+
     /** Owns the NameDrop port (retrying while DapTap still holds it) and forwards what arrives. */
     private fun dataLoop(control: DatagramSocket, token: ByteArray) {
         var s: DatagramSocket? = null
@@ -90,7 +149,8 @@ object LinkHelper {
             s = runCatching { DatagramSocket(null).apply { reuseAddress = true; bind(InetSocketAddress(DATA_PORT)) } }.getOrNull()
             if (s == null) Thread.sleep(1_000)
         }
-        s.soTimeout = 250
+        // Short, so a BIND (applied between receives) never holds up the relay for long.
+        s.soTimeout = 20
         data = s
         val buf = ByteArray(65536)
         while (true) {
@@ -103,6 +163,7 @@ object LinkHelper {
             try { s.receive(p) } catch (_: java.net.SocketTimeoutException) { continue } catch (_: Exception) { Thread.sleep(100); continue }
             val to = app ?: continue
             val from = p.socketAddress as? InetSocketAddress ?: continue
+            received++
             val out = ByteBuffer.allocate(19 + 22 + p.length)
             header(out, token, RECV)
             writeAddress(out, from)

@@ -32,6 +32,15 @@ class HelperLink(private val token: ByteArray) {
 
     fun stop() { request(LinkHelper.STOP, ByteArray(0), 500) }
 
+    /** The helper's counters (relayed, retried, failed sends, kernel drops), or null if it doesn't answer. */
+    fun stats(): String? = request(LinkHelper.STATS, ByteArray(0), 500)?.let { text(it) }
+
+    /** Called with what the helper reports unasked (sends that failed), on the relay's receive thread. */
+    @Volatile var onNotice: ((String) -> Unit)? = null
+
+    /** The network the helper's NameDrop socket was last tied to, so the same link isn't bound twice. */
+    @Volatile var boundHandle = 0L
+
     private fun text(b: ByteBuffer) = String(ByteArray(b.remaining()).also { b.get(it) })
 
     private fun request(type: Int, body: ByteArray, timeoutMs: Int): ByteBuffer? = runCatching {
@@ -64,6 +73,7 @@ class HelperLink(private val token: ByteArray) {
         private val rx = ByteArray(65536)
 
         init {
+            runCatching { receiveBufferSize = 4 shl 20 }
             val out = ByteBuffer.allocate(19)
             LinkHelper.header(out, token, LinkHelper.ATTACH)
             super.send(DatagramPacket(out.array(), out.position(), helper))
@@ -85,7 +95,12 @@ class HelperLink(private val token: ByteArray) {
                 val b = ByteBuffer.wrap(q.data, 0, q.length)
                 if (q.length < 19 + 22 || b.get() != 'D'.code.toByte() || b.get() != 'T'.code.toByte()) continue
                 val t = ByteArray(16).also { b.get(it) }
-                if (!t.contentEquals(token) || b.get().toInt() != LinkHelper.RECV) continue
+                if (!t.contentEquals(token)) continue
+                when (b.get().toInt()) {
+                    LinkHelper.RECV -> Unit
+                    LinkHelper.NOTICE -> { runCatching { onNotice?.invoke(text(b)) }; continue }
+                    else -> continue
+                }
                 val from = LinkHelper.readAddress(b)
                 val n = minOf(b.remaining(), p.data.size - p.offset)
                 b.get(p.data, p.offset, n)

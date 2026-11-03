@@ -53,6 +53,13 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Notifications.cancelUpdated(this)
+        // Back from an iPhone swap: the cover over Quick Share comes off once DapTap has drawn a frame.
+        // A frame callback runs before that frame is drawn, so wait for the next one.
+        window.decorView.post {
+            android.view.Choreographer.getInstance().postFrameCallback {
+                android.view.Choreographer.getInstance().postFrameCallback { app.engine.onAppShown() }
+            }
+        }
         // A process started in the background (an NFC tap) can't start the testing service; the app can.
         if (app.prefs.settings.value.testingMode) com.keshav.daptap.diag.TestingService.set(this, true)
         // Coming back from "Install unknown apps" continues an update; release builds also look for a newer

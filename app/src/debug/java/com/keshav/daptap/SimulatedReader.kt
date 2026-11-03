@@ -79,6 +79,17 @@ class SimulatedReader : BroadcastReceiver() {
         }
         if (intent.getBooleanExtra("kwikdebug", false)) System.setProperty("daptap.kwikdebug", "1")
         if (intent.getBooleanExtra("namedrop", false)) { simulateNameDrop(context, engine); return }
+        // --ez cover true: the swap cover over Quick Share, then (1.5 s later) with a received card on it.
+        if (intent.getBooleanExtra("cover", false)) {
+            val o = com.keshav.daptap.overlay.OverlayController(app)
+            o.showCover()
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                val photo = com.keshav.daptap.data.Photos.readMine(app)?.let { com.keshav.daptap.data.Photos.thumbnail(it, 720, 400_000) }
+                o.showCoverCard(com.keshav.daptap.data.Person(card = com.keshav.daptap.core.ContactCard(name = intent.getStringExtra("name") ?: ""), photo = null, via = "namedrop", at = 0), photo)
+            }, 1_500)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ o.hideCover() }, 6_000)
+            return
+        }
         if (intent.getBooleanExtra("apple", false)) engine.onPollingFrame(byteArrayOf(0x6A, 0x02, 0xC8.toByte(), 0x01, 0x00, 0x00))
         val tag = Type4Tag({ engine.currentMessage() }, object : Type4Tag.Listener {
             override fun onReaderSelected() = engine.onReaderSelected()
@@ -131,12 +142,15 @@ class SimulatedReader : BroadcastReceiver() {
         fun x(hex: String) = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         fun hx(b: ByteArray) = b.joinToString("") { "%02X".format(it) }
         val (id, blobs) = com.keshav.daptap.nfc.SnapKeys.get(context)
+        engine.setBeaconEnabled(true)
         engine.setBeaconActive(true)
         engine.onPollingFrame(x("6A02890500010000000000000000"))
         val tag = Type4Tag({ engine.currentMessage() }, object : Type4Tag.Listener {
             override fun onNdefRefused() = engine.onNdefRefused()
         }, refuseNdef = { engine.refuseNdef(it) })
         val ndef = tag.process(x("00A4040007D276000085010100"))
+        engine.onDeactivated(false) // the refused tag read ends: the beacon should burst at once (a kick)
+        Thread.sleep(150)
         val applet = com.keshav.daptap.core.SnapApplet(blobs)
         fun send(cmd: ByteArray): ByteArray {
             val r = applet.dispatch(cmd)!!
@@ -152,9 +166,13 @@ class SimulatedReader : BroadcastReceiver() {
         val si = send(byteArrayOf(0, 0xCA.toByte(), 1, 3, theirs.size.toByte()) + theirs + 0)
         out.append("serverinfo=").append(si.size - 2).append(" B sw=").append(hx(si.takeLast(2).toByteArray())).append('\n')
         out.append("caps=").append(hx(send(byteArrayOf(0, 0xCA.toByte(), 1, 3, 85) + ByteArray(85) + 0).takeLast(2).toByteArray())).append('\n')
-        applet.reset()
+        // As TapService does on link loss: the redirect drops the link, the iPhone comes back ~0.9 s later.
+        applet.reset(); engine.onDeactivated(true); engine.onNameDropLinkEnded(0)
+        Thread.sleep(900)
         send(x("00A4040009A000000858044F010000"))
         out.append("resume=").append(hx(send(x("00CA010404" + "02195AA5" + "00")).takeLast(2).toByteArray())).append('\n')
+        Thread.sleep(35)
+        applet.reset(); engine.onDeactivated(true); engine.onNameDropLinkEnded(0)
         out.append("uuid=").append(id.uuidString).append(" spki=").append(id.spki.size).append('\n')
         File(context.cacheDir, "simulated-namedrop.txt").writeText(out.toString())
         Log.i("DapTapSim", out.toString())

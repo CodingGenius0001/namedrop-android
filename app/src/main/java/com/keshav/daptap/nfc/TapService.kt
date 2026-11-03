@@ -33,6 +33,7 @@ class TapService : HostApduService() {
     override fun processCommandApdu(commandApdu: ByteArray?, extras: Bundle?): ByteArray {
         if (commandApdu == null) return Type4Tag.SW_WRONG_LENGTH
         inSession = true
+        lastApduAt = android.os.SystemClock.elapsedRealtime()
         val boop = runCatching { snap.dispatch(commandApdu) }.getOrNull()
         if (boop != null) {
             engine.onSnap(boop.event, boop.detail, snap.peerUuid, snap.peerLabel)
@@ -46,10 +47,11 @@ class TapService : HostApduService() {
 
     override fun onDeactivated(reason: Int) {
         inSession = false
-        if (snap.selected) engine.onNameDropLinkEnded(reason)
+        val boop = snap.selected
         tag.reset()
         snap.reset()
-        engine.onDeactivated()
+        engine.onDeactivated(boop)
+        if (boop) engine.onNameDropLinkEnded(reason)
     }
 
     /** Android 15+: polling frames observed before any APDU. Apple ECP frames reveal an iPhone nearby. */
@@ -72,5 +74,9 @@ class TapService : HostApduService() {
         /** An ISO-DEP exchange is in progress: the beacon must not raise its reader field and tear it down. */
         @Volatile var inSession = false
             private set
+        @Volatile private var lastApduAt = 0L
+
+        /** [inSession] with no APDU for seconds: a deactivation Android never reported. */
+        fun stale() = android.os.SystemClock.elapsedRealtime() - lastApduAt > 3_000
     }
 }
