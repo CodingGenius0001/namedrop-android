@@ -13,7 +13,7 @@ Audience/job: someone standing with a new acquaintance (often an iPhone owner), 
 
 THESIS: Every swap is a frosted glass ticket in a wallet: your card is your contact pass, each person you meet is a pass in the stack, and states stamp themselves (SENT, SAVED, RECEIVE ONLY, VOID) instead of vanishing. Refuses the avatar-circle-plus-list contact screen and the generic glass card.
 
-OWN-WORLD: Carrier navy ground (#14234F to #0B1530), passes in frosted glass (blur, white 8-22% fill, 1px top highlight), notched corners and a dashed perforation separating pass from stub, tab-cap labels in tracked caps, values in a carbon-purple numeral voice, jet red for the live state and stamps only, white cell-letter first name.
+OWN-WORLD: Carrier navy ground (#17295C to #0A1330), passes in frosted glass (blur, white 8-22% fill, 1px top highlight), notched corners and a dashed perforation separating pass from stub, tab-cap labels in tracked caps, values in a carbon-purple numeral voice, jet red for the live state and stamps only, white cell-letter first name.
 
 STORY: Open: your pass, name big in glass cells, stub saying READY TO TAP and your last swap. Tap: the stub tears off with a glass-edge shine, a SENT stamp lands; their pass slides into the wallet on top with SAVED. People: the stack, newest on top.
 
