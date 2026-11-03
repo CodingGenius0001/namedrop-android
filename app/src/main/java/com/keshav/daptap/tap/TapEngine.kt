@@ -172,7 +172,10 @@ class TapEngine(
             // there, then fall back to the name it gave the exchange.
             val poster = if (parsed.card.name.isBlank()) runCatching { PosterName.inspect(String(vcard, Charsets.UTF_8)) }
                 .onFailure { log("NameDrop: couldn't read the poster (${it.javaClass.simpleName})") }.getOrNull() else null
-            poster?.let { log("NameDrop: poster ${it.description}") }
+            poster?.let { r ->
+                log("NameDrop: poster outline follows (${r.description.length} chars), name found: ${r.name ?: "none"}")
+                r.description.lineSequence().filter { it.isNotBlank() }.forEach { log("  poster| $it") }
+            }
             val fallback = poster?.name ?: fullName
             val card = if (parsed.card.name.isBlank() && !fallback.isNullOrBlank()) parsed.card.copy(name = fallback) else parsed.card
             log("NameDrop: got ${card.name.ifBlank { "a card without a name" }} from the iPhone")
@@ -669,7 +672,7 @@ class TapEngine(
         const val NFC_PHOTO_PX = 128
         const val NFC_PHOTO_MAX = 3_600
         const val RELAY_PHOTO_MAX = 2_000
-        const val LOG_MAX = 300
+        const val LOG_MAX = 1500
 
         fun hex(b: ByteArray) = b.joinToString("") { "%02X".format(it) }
     }

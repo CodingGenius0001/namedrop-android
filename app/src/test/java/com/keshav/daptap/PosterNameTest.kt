@@ -52,4 +52,17 @@ class PosterNameTest {
         assertNull(PosterName.inspect(card(p)).name)
         assertEquals("no poster", PosterName.inspect("BEGIN:VCARD\r\nN:;;;;\r\nEND:VCARD").description)
     }
+
+    @Test fun `a poster title string inside a keyed archive counts as the name`() {
+        val objects = NSArray(
+            NSString("\$null"),
+            NSDictionary().apply { put("displayNameText", UID("t", byteArrayOf(2))); put("fontName", UID("f", byteArrayOf(3))); put("\$class", UID("c", byteArrayOf(4))) },
+            NSString("Jash"), NSString("SFPro-Bold"),
+            NSDictionary().apply { put("\$classname", "PRPosterTitleConfiguration") },
+        )
+        val root = BinaryPropertyListWriter.writeToArray(NSDictionary().apply { put("\$objects", objects); put("\$archiver", "NSKeyedArchiver") })
+        val r = PosterName.inspect(card(root))
+        assertEquals("Jash", r.name)
+        assertTrue(r.description, r.description.contains("\"SFPro-Bold\""))
+    }
 }

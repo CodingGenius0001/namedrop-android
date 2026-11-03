@@ -93,7 +93,7 @@ class LogUploader(
         const val TOPIC_PREFIX = "daptap-log-"
         /** Sealed + base64url, 2,900 bytes stays under Relay.MAX_BODY. */
         private const val CHUNK_BYTES = 2_900
-        private const val MAX_CHUNKS = 6
+        private const val MAX_CHUNKS = 24
         private const val QUIET_MS = 4_000L
         private const val MIN_INTERVAL_MS = 15_000L
     }
