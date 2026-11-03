@@ -103,17 +103,28 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
         val nameless = card.name.isBlank()
         var naming by remember(card) { mutableStateOf(false) }
         Poster(card, photo, ground, topInset = top, bottomInset = bottom + if (nameless) 200.dp else 140.dp,
-            nameProgress = build.value, wave = wave.value, placeholder = "HELLO")
+            nameProgress = build.value, wave = wave.value, placeholder = "HELLO",
+            head = "CONTACT PASS", headRight = "RECEIVED",
+            stub = {
+                androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (actions.saved) "IN YOUR CONTACTS" else "NOT SAVED YET", style = Wallet.tabCaps.copy(color = Wallet.ink, fontSize = 13.sp))
+                        Text(if (actions.saved) "You can find them in Contacts" else "Save them before you forget",
+                            color = Wallet.inkSoft, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    if (actions.saved) Stamp("SAVED")
+                }
+            })
         if (naming) NameDialog(onDone = { n -> naming = false; if (n.isNotBlank()) actions.onRename?.invoke(n) }, onDismiss = { naming = false })
 
         Row(
             Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).height(64.dp).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = actions.onClose) { Icon(Icons.Outlined.Close, "Close", tint = ground.ink) }
-            Text(title, color = ground.ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            IconButton(onClick = actions.onClose) { Icon(Icons.Outlined.Close, "Close", tint = Wallet.ink) }
+            Text(title, color = Wallet.ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             actions.onDelete?.let { del ->
-                IconButton(onClick = del) { Icon(Icons.Outlined.DeleteOutline, "Remove from People", tint = ground.ink) }
+                IconButton(onClick = del) { Icon(Icons.Outlined.DeleteOutline, "Remove from People", tint = Wallet.ink) }
             }
         }
 
@@ -127,8 +138,8 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
                 OutlinedButton(
                     onClick = { naming = true },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                    border = BorderStroke(1.dp, ground.inkSoft),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ground.ink),
+                    border = BorderStroke(1.dp, Wallet.inkSoft),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Wallet.ink),
                 ) {
                     Icon(Icons.Outlined.Edit, null); Spacer(Modifier.width(8.dp))
                     Text("Add their name", fontSize = 16.sp)
@@ -139,12 +150,12 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
                 enabled = !actions.saved && !actions.saving,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ground.ink, contentColor = ground.color,
-                    disabledContainerColor = ground.raised, disabledContentColor = ground.ink,
+                    containerColor = Wallet.ink, contentColor = Wallet.navyTop,
+                    disabledContainerColor = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.14f), disabledContentColor = Wallet.ink,
                 ),
             ) {
                 when {
-                    actions.saving -> CircularProgressIndicator(Modifier.size(20.dp), color = ground.color, strokeWidth = 2.dp)
+                    actions.saving -> CircularProgressIndicator(Modifier.size(20.dp), color = Wallet.navyTop, strokeWidth = 2.dp)
                     actions.saved -> {
                         Icon(Icons.Outlined.Check, null); Spacer(Modifier.width(8.dp))
                         Text("Saved to Contacts", fontSize = 16.sp)
@@ -160,8 +171,8 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
                     onClick = { actions.onShareBack?.invoke() },
                     enabled = actions.onShareBack != null && !actions.sharingBack && !actions.sharedBack,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                    border = BorderStroke(1.dp, ground.inkSoft),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ground.ink, disabledContentColor = ground.inkSoft),
+                    border = BorderStroke(1.dp, Wallet.inkSoft),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Wallet.ink, disabledContentColor = Wallet.inkSoft),
                 ) {
                     Text(
                         when {

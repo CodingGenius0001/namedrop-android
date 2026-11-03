@@ -20,6 +20,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,7 +40,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -68,10 +72,10 @@ enum class NfcState { ON, OFF, MISSING }
 /** Exponential-style ease-out: most of the distance in the first moment, like a burst. */
 private val BurstOut = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0.7f, 0.35f, 1f)
 
-/** Text on an accent fill (vermilion or yellow): about 6:1 on both. */
-private val LiveInk = androidx.compose.ui.graphics.Color(0xFF16161A)
-
-/** Home: your card as a poster. Bring phones together and the grid ripples, then the status says what happened. */
+/**
+ * Home: your contact pass. While phones touch, light sweeps across the glass and the pass gives a little; when
+ * the card goes, a stamp lands on the stub, and when the next tap is ready the old stub tears away.
+ */
 @Composable
 fun CardScreen(
     card: ContactCard,
@@ -85,25 +89,29 @@ fun CardScreen(
     onFixNfc: () -> Unit,
     onEnableTap: () -> Unit,
     onAddPhoto: () -> Unit,
+    /** "Najib · 10:00" for the newest person in People, or null. */
+    lastSwap: String? = null,
+    /** How many people are in the wallet (older passes peek out under yours). */
+    peopleCount: Int = 0,
 ) {
     val ground = LocalGround.current
     val reduce = reducedMotion(LocalContext.current)
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp
 
-    val wave = remember { Animatable(-1f) }
+    val shine = remember { Animatable(-1f) }
     val build = remember { Animatable(1f) }
     val touching = phase is TapEngine.Phase.Touching
     LaunchedEffect(touching) {
-        if (!touching || reduce) { wave.snapTo(-1f); return@LaunchedEffect }
-        // The first wave bursts out fast from the contact point; the ones after it keep a steady pulse.
+        if (!touching || reduce) { shine.snapTo(-1f); return@LaunchedEffect }
+        // The first sweep bursts across from where the phones met; the ones after keep a steady pulse.
         var first = true
         while (true) {
-            wave.snapTo(0f)
-            wave.animateTo(1f, if (first) tween(900, easing = BurstOut) else tween(1100, easing = LinearEasing))
+            shine.snapTo(0f)
+            shine.animateTo(1f, if (first) tween(800, easing = BurstOut) else tween(1200, easing = LinearEasing))
             first = false
         }
     }
-    // The poster gives a little under the other phone, then springs back when the card goes.
+    // The pass gives a little under the other phone, then springs back when the card goes.
     val press by animateFloatAsState(
         if (touching && !reduce) 0.975f else 1f,
         spring(dampingRatio = 0.5f, stiffness = 420f), label = "press",
@@ -116,9 +124,11 @@ fun CardScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        Poster(card, photo, ground, topInset = top, bottomInset = contentPadding.calculateBottomPadding() + 72.dp,
-            nameProgress = build.value, wave = wave.value, onAddPhoto = onAddPhoto,
-            modifier = Modifier.graphicsLayer {
+        Poster(card, photo, ground, topInset = top, bottomInset = contentPadding.calculateBottomPadding() + 80.dp,
+            nameProgress = build.value, wave = shine.value, onAddPhoto = onAddPhoto,
+            headRight = "DAPTAP", stack = minOf(peopleCount, 2),
+            stub = { Stub(phase, nfc, tapEnabled, lastSwap, onFixNfc, onEnableTap, reduce) },
+            passModifier = Modifier.graphicsLayer {
                 scaleX = press; scaleY = press
                 transformOrigin = TransformOrigin(TapOrigin.x, TapOrigin.y)
             })
@@ -127,75 +137,105 @@ fun CardScreen(
             Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).height(64.dp).padding(start = 20.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("DapTap", color = ground.ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("DapTap", color = Wallet.ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             IconButton(onClick = onSend) {
-                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send my card with Quick Share", tint = ground.ink)
+                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send my card with Quick Share", tint = Wallet.ink)
             }
         }
 
-        Row(
-            Modifier.align(Alignment.BottomStart).fillMaxWidth()
-                .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp, start = 16.dp, end = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Button(
+            onClick = onEdit,
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp, start = 16.dp, end = 16.dp)
+                .heightIn(min = 56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Wallet.ink, contentColor = Wallet.navyTop),
         ) {
-            StatusChip(phase, nfc, tapEnabled, onFixNfc, onEnableTap, Modifier.weight(1f))
-            // At large font sizes the label would squeeze the status out, so the button folds to its icon.
-            val roomy = LocalDensity.current.fontScale < 1.15f
-            ExtendedFloatingActionButton(
-                onClick = onEdit,
-                expanded = roomy,
-                containerColor = ground.ink, contentColor = ground.color,
-                icon = { Icon(Icons.Outlined.Edit, contentDescription = if (roomy) null else "Edit card") },
-                text = { Text("Edit card", fontWeight = FontWeight.SemiBold) },
-            )
+            Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Edit card", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
+/** What the stub says: a tab-caps head, a plain line under it, and the stamp a finished swap leaves. */
+private data class StubText(val head: String, val line: String, val stamp: String?, val action: (() -> Unit)?, val armed: Boolean)
+
+private fun stubText(
+    phase: TapEngine.Phase, nfc: NfcState, tapEnabled: Boolean, lastSwap: String?,
+    onFixNfc: () -> Unit, onEnableTap: () -> Unit,
+): StubText = when {
+    nfc == NfcState.MISSING -> StubText("NO NFC", "This phone can't tap to share", null, null, false)
+    nfc == NfcState.OFF -> StubText("NFC IS OFF", "Tap here to turn it on", null, onFixNfc, false)
+    !tapEnabled -> StubText("TAP SHARING IS OFF", "Tap here to turn it on", null, onEnableTap, false)
+    phase is TapEngine.Phase.Touching -> StubText("HOLD STEADY", "Keep the phones together", null, null, true)
+    phase is TapEngine.Phase.Sent && phase.airDrop -> StubText("ON ITS WAY", "They tap Accept on their iPhone", "SENT", null, true)
+    phase is TapEngine.Phase.Sent && phase.peer == TapEngine.Peer.ANDROID -> StubText("CARDS SWAPPED", "You have each other's cards", "SWAPPED", null, true)
+    phase is TapEngine.Phase.Sent -> StubText("CARD READ", "Your card went to their phone", "SENT", null, true)
+    else -> StubText("READY TO TAP", lastSwap?.let { "Last swap: $it" } ?: "Hold phones back to back", null, null, true)
+}
+
+/**
+ * The tear-off stub. A stamp slams onto it when a swap lands; when the next tap is ready the stamped stub
+ * tears away (drops, tilts and fades) and a fresh one takes its place.
+ */
 @Composable
-private fun StatusChip(
-    phase: TapEngine.Phase,
-    nfc: NfcState,
-    tapEnabled: Boolean,
-    onFixNfc: () -> Unit,
-    onEnableTap: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun Stub(
+    phase: TapEngine.Phase, nfc: NfcState, tapEnabled: Boolean, lastSwap: String?,
+    onFixNfc: () -> Unit, onEnableTap: () -> Unit, reduce: Boolean,
 ) {
-    val ground = LocalGround.current
-    val (text, action) = when {
-        nfc == NfcState.MISSING -> "This phone has no NFC" to null
-        nfc == NfcState.OFF -> "NFC is off. Turn it on" to onFixNfc
-        !tapEnabled -> "Tap sharing is off. Turn on" to onEnableTap
-        phase is TapEngine.Phase.Touching -> "Hold steady…" to null
-        phase is TapEngine.Phase.Sent && phase.airDrop -> "Sent. They tap Accept" to null
-        phase is TapEngine.Phase.Sent && phase.peer == TapEngine.Peer.ANDROID -> "Cards swapped" to null
-        phase is TapEngine.Phase.Sent -> "Your card was read" to null
-        else -> "Ready. Hold phones back to back" to null
+    val want = stubText(phase, nfc, tapEnabled, lastSwap, onFixNfc, onEnableTap)
+    var shown by remember { mutableStateOf(want) }
+    val tear = remember { Animatable(0f) }
+    val slam = remember { Animatable(1f) }
+    LaunchedEffect(want) {
+        val tearing = shown.stamp != null && want.stamp == null && !reduce
+        if (tearing) {
+            tear.animateTo(1f, tween(380, easing = FastOutSlowInEasing))
+            shown = want
+            tear.snapTo(-0.4f)
+            tear.animateTo(0f, tween(260, easing = BurstOut))
+        } else {
+            val newStamp = want.stamp != null && want.stamp != shown.stamp
+            shown = want
+            if (newStamp && !reduce) {
+                slam.snapTo(0f)
+                slam.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 520f))
+            }
+        }
     }
-    val armed = nfc == NfcState.ON && tapEnabled
-    // While a tap is live the whole chip becomes the accent: the one place the second colour appears.
-    val live = armed && phase !is TapEngine.Phase.Ready
-    val fill by animateColorAsState(if (live) ground.accent else ground.raised, tween(180), label = "fill")
-    val ink by animateColorAsState(if (live) LiveInk else ground.ink, tween(180), label = "ink")
-    Surface(
-        modifier = modifier.heightIn(min = 48.dp).semantics { liveRegion = LiveRegionMode.Polite }
-            .let { if (action != null) it.clickable(onClick = action) else it },
-        shape = RoundedCornerShape(24.dp),
-        color = fill,
-        contentColor = ink,
+    val t = tear.value
+    Row(
+        Modifier.fillMaxWidth()
+            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+            .let { m -> shown.action?.let { a -> m.clickable(onClick = a) } ?: m }
+            .graphicsLayer {
+                // Tearing away: the stub drops and tilts from its left end. Arriving (t < 0): it rises into place.
+                translationY = t * 36.dp.toPx()
+                rotationZ = if (t > 0f) t * 5f else 0f
+                alpha = 1f - kotlin.math.abs(t).coerceIn(0f, 1f)
+                transformOrigin = TransformOrigin(0f, 0f)
+            },
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            when {
-                phase is TapEngine.Phase.Sent && armed ->
-                    Icon(Icons.Outlined.Check, contentDescription = null, tint = ink, modifier = Modifier.size(16.dp))
-                phase is TapEngine.Phase.Touching && armed -> PulsingDot(ink)
-                else -> StateDot(if (armed) ground.accent else ground.inkSoft)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    !shown.armed -> StateDot(Wallet.inkSoft)
+                    phase is TapEngine.Phase.Touching -> PulsingDot(Wallet.jet)
+                    else -> StateDot(Wallet.jet)
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(shown.head, style = Wallet.tabCaps.copy(color = Wallet.ink, fontSize = 13.sp))
             }
-            Spacer(Modifier.width(10.dp))
-            AnimatedContent(text, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) }, label = "status") {
-                Text(it, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 2)
-            }
+            Text(shown.line, color = Wallet.inkSoft, fontSize = 15.sp, maxLines = 2,
+                modifier = Modifier.padding(top = 4.dp, start = 16.dp))
+        }
+        shown.stamp?.let { s ->
+            Stamp(s, Modifier.graphicsLayer {
+                val k = slam.value
+                scaleX = 1.8f - 0.8f * k; scaleY = scaleX
+                alpha = k.coerceIn(0f, 1f)
+            })
         }
     }
 }

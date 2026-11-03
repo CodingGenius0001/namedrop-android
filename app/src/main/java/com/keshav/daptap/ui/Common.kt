@@ -89,20 +89,17 @@ fun StateDot(color: Color, modifier: Modifier = Modifier) {
     Box(modifier.size(8.dp).clip(CircleShape).background(color))
 }
 
-/** Title band for the utility tabs: the card's own ground and grid, so the poster's world carries over. */
+/** Title band for People and Settings: the wallet's navy, so every tab sits in the same world. */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun GroundTopBar(title: String) {
-    val ground = LocalGround.current
-    Box(Modifier.background(ground.color)) {
-        ConstructionGrid(GROUND_BAND_PITCH, ground.line, Modifier.matchParentSize())
+    Box(Modifier.walletGround()) {
         androidx.compose.material3.TopAppBar(
             title = { Text(title, fontWeight = FontWeight.Bold, fontSize = 22.sp) },
             colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent, titleContentColor = ground.ink,
+                containerColor = Color.Transparent, titleContentColor = Wallet.ink,
             ),
         )
     }
 }
 
-private val GROUND_BAND_PITCH = 16.dp

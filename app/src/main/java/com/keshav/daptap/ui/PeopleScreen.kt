@@ -31,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,12 +40,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.keshav.daptap.data.Person
 
-/** One cell of the People strips: names and the grid behind them share it, so every name registers. */
+/** One cell of the names on People passes. */
 private val STRIP_CELL = 7.dp
 
 /**
- * Everyone whose card you've received, newest first. Each person is a strip of their own ground with their
- * first name built in cells, a run of small posters rather than a contact list.
+ * Everyone whose card you've received, newest first: the wallet's stack of passes. Each pass carries how and
+ * when you met in tab caps, their first name in cells, and a SAVED stamp once they're in your contacts.
  */
 @Composable
 fun PeopleScreen(
@@ -54,67 +56,79 @@ fun PeopleScreen(
 ) {
     Scaffold(
         topBar = { GroundTopBar("People") },
+        containerColor = Wallet.navyBottom,
         contentWindowInsets = WindowInsets(0),
         modifier = Modifier.padding(bottom = contentPadding.calculateBottomPadding()),
     ) { padding ->
-        if (people.isEmpty()) {
-            EmptyPeople(Modifier.padding(padding))
-            return@Scaffold
-        }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
-            items(people, key = { it.id }) { p -> PersonStrip(p, rememberBitmap(photoOf(p)), onOpen) }
+        Box(Modifier.fillMaxSize().walletGround()) {
+            if (people.isEmpty()) {
+                EmptyPeople(Modifier.padding(padding))
+                return@Box
+            }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = padding.calculateTopPadding() + 8.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // Rows never jump: each person keeps their pass, and only its content changes.
+                items(people, key = { it.id }) { p -> PersonPass(p, rememberBitmap(photoOf(p)), onOpen, Modifier) }
+            }
         }
     }
 }
 
 @Composable
-private fun PersonStrip(p: Person, photo: androidx.compose.ui.graphics.ImageBitmap?, onOpen: (Person) -> Unit) {
+private fun PersonPass(p: Person, photo: androidx.compose.ui.graphics.ImageBitmap?, onOpen: (Person) -> Unit, modifier: Modifier) {
     val ground = Grounds.of(p.card.label)
     val cell = STRIP_CELL
     val ago = DateUtils.getRelativeTimeSpanString(p.at, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
     val how = when (p.via) {
-        "namedrop" -> "NameDrop"
-        "airdrop" -> "AirDrop"
-        "web" -> "Web card"
-        "share" -> "Shared"
-        "link" -> "Link"
-        else -> "Tap"
+        "namedrop" -> "NAMEDROP"
+        "airdrop" -> "AIRDROP"
+        "web" -> "WEB CARD"
+        "share" -> "SHARED"
+        "link" -> "LINK"
+        else -> "TAP"
     }
-    Box(
-        Modifier.fillMaxWidth().background(ground.color)
-            .clickable(onClickLabel = "Open ${p.card.firstName.ifBlank { "card" }}", role = Role.Button) { onOpen(p) }
+    val first = p.card.firstName.ifBlank { p.card.name }
+    GlassPass(
+        ground,
+        modifier.fillMaxWidth().clip(PassShape(22.dp, null))
+            .clickable(onClickLabel = "Open ${first.ifBlank { "card" }}", role = Role.Button) { onOpen(p) },
+        corner = 22.dp,
     ) {
-        ConstructionGrid(cell, ground.line, Modifier.matchParentSize())
-        // A hairline of the raised ground separates neighbours that share a colour.
-        Box(Modifier.fillMaxWidth().height(1.dp).background(ground.raised))
-        Row(
-            Modifier.padding(start = cell * 2, end = cell * 2, top = cell * 2, bottom = cell * 2),
-            verticalAlignment = Alignment.Top,
-        ) {
-            Column(Modifier.weight(1f)) {
-                val first = p.card.firstName.ifBlank { p.card.name.ifBlank { "?" } }
-                CellName(first, ground.ink, maxCell = cell, origin = Offset(0f, 0.5f))
-                Spacer(Modifier.height(cell))
-                val rest = p.card.restOfName()
-                if (rest.isNotEmpty()) {
-                    Text(rest, color = ground.ink, fontSize = 17.sp, fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                Text(
-                    listOf(p.card.roleLine, "$how · $ago").filter { it.isNotBlank() }.joinToString("\n"),
-                    color = ground.inkSoft, fontSize = 14.sp, lineHeight = 19.sp, maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (photo != null || p.saved) {
-                Spacer(Modifier.width(cell * 2))
-                Column(horizontalAlignment = Alignment.End) {
-                    if (photo != null) PhotoTile(photo, p.card, ground, cell * 8)
-                    if (p.saved) {
-                        Icon(Icons.Outlined.CheckCircle, contentDescription = "Saved to Contacts", tint = ground.ink,
-                            modifier = Modifier.padding(top = if (photo != null) cell else 0.dp).size(20.dp))
+        Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 18.dp)) {
+            PassHead(how, ago.toString().uppercase())
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    if (first.isBlank()) {
+                        // An iPhone can share a number and photo but no name: say so, and what to do.
+                        Text("No name yet", color = Wallet.ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text(p.card.phone.ifBlank { p.card.email }.ifBlank { "Open to add their name" },
+                            color = Wallet.carbon, fontSize = 15.sp, modifier = Modifier.padding(top = 2.dp))
+                    } else {
+                        CellName(first, Wallet.ink, maxCell = cell, origin = Offset(0f, 0.5f))
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    val rest = p.card.restOfName()
+                    if (rest.isNotEmpty()) {
+                        Text(rest, color = Wallet.ink, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (p.card.roleLine.isNotBlank()) {
+                        Text(p.card.roleLine, color = Wallet.inkSoft, fontSize = 14.sp, lineHeight = 19.sp, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
                     }
                 }
+                if (photo != null) {
+                    Spacer(Modifier.width(16.dp))
+                    PhotoTile(photo, p.card, ground, 64.dp)
+                }
+            }
+            if (p.saved) {
+                Spacer(Modifier.height(10.dp))
+                Stamp("SAVED", Modifier.semantics { contentDescription = "Saved to Contacts" }, angle = -5f)
             }
         }
     }
@@ -122,21 +136,23 @@ private fun PersonStrip(p: Person, photo: androidx.compose.ui.graphics.ImageBitm
 
 @Composable
 private fun EmptyPeople(modifier: Modifier) {
-    val ground = LocalGround.current
     val cell = 8.dp
     Column(
         modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.fillMaxWidth().height(cell * 15).clip(RoundedCornerShape(20.dp)).background(ground.color)) {
-            ConstructionGrid(cell, ground.line, Modifier.matchParentSize())
-            CellName("HELLO", ground.ink, maxCell = cell, modifier = Modifier.padding(start = cell * 2, top = cell * 4))
+        GlassPass(LocalGround.current, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 28.dp)) {
+                PassHead("YOUR WALLET", "EMPTY")
+                Spacer(Modifier.height(20.dp))
+                CellName("HELLO", Wallet.ink, maxCell = cell)
+            }
         }
-        Text("No one yet", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 24.dp))
+        Text("No one yet", color = Wallet.ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 28.dp))
         Text(
-            "Cards you get from a tap, an AirDrop or a web reply land here, so you can save them later.",
-            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            "Every card you get from a tap, an AirDrop or a web reply lands here as a pass, so you can save it later.",
+            color = Wallet.inkSoft, fontSize = 15.sp, lineHeight = 21.sp,
             textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp),
         )
     }

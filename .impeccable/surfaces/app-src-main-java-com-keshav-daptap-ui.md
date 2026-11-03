@@ -5,20 +5,20 @@ primary_target: "app/src/main/java/com/keshav/daptap/ui"
 related_targets: ["web/c"]
 ---
 
-Scope: DapTap card screen (home) plus the tap/receive overlay; same world carries to People, Settings and the web fallback card. Mode: operate.
+Scope: DapTap Card screen (home), the incoming-card screen, People, Settings, and the tap/receive overlay; the web fallback card follows later. Mode: operate.
 
-Audience/job: someone standing with a new acquaintance, phone in hand, wanting to swap cards in one tap. Constraints: Material 3 controls and Android navigation; first name must always fit on ONE line, with cell size computed from the name's length (user pinned).
+Audience/job: someone standing with a new acquaintance (often an iPhone owner), phone in hand, swapping cards in one tap; afterwards, finding who they met. Constraints: Material 3 controls, Android navigation and predictive Back; first name always on ONE line in cell letters, cell size computed from the name's length (user pinned); liquid-glass material (user pinned); reduced motion removes all motion.
 
 ## Direction contract
 
-THESIS: Your name is a monumental poster built from grid cells, and a tap rebuilds the other person's name on the same grid. Refuses the avatar-circle-plus-list contact screen.
+THESIS: Every swap is a frosted glass ticket in a wallet: your card is your contact pass, each person you meet is a pass in the stack, and states stamp themselves (SENT, SAVED, RECEIVE ONLY, VOID) instead of vanishing. Refuses the avatar-circle-plus-list contact screen and the generic glass card.
 
-OWN-WORLD: Drenched saturated ground per person (ultramarine default; five more label grounds), a faint visible construction grid at the letter cell pitch, white rounded-square cells, small neutral grotesk for everything else, one vermilion accent plane for the live state.
+OWN-WORLD: Carrier navy ground (#14234F to #0B1530), passes in frosted glass (blur, white 8-22% fill, 1px top highlight), notched corners and a dashed perforation separating pass from stub, tab-cap labels in tracked caps, values in a carbon-purple numeral voice, jet red for the live state and stamps only, white cell-letter first name.
 
-STORY: Open the app: you see yourself, big. Bring phones together: cells ripple out from the touch point, your name dissolves, theirs builds cell by cell, then Save.
+STORY: Open: your pass, name big in glass cells, stub saying READY TO TAP and your last swap. Tap: the stub tears off with a glass-edge shine, a SENT stamp lands; their pass slides into the wallet on top with SAVED. People: the stack, newest on top.
 
-FIRST VIEWPORT: top app bar (DapTap, settings), first name in cell letters full width on one line, surname and role in grotesk under it, detail rows, ready chip with the live dot, primary action Edit card, navigation bar Card / People / Settings.
+FIRST VIEWPORT: top app bar (DapTap, settings), contact pass (CONTACT PASS · NO., cell name, surname, role, detail rows), perforation, stub (READY TO TAP, last swap, stamp), older passes peeking behind, full-width Edit card, navigation bar Card / People / Settings.
 
-FORM: Crouwel grid specimen (dealt challenger, user-steered: one-line auto-fit names). seed:3ffeb0646d8fed2d
+FORM: Jet-age ticket wallet (dealt challenger, chosen by the user over the pick), translated into liquid glass. seed:726cc93c6cb5b1ad
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance

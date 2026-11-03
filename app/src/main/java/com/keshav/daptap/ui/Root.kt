@@ -365,6 +365,13 @@ fun DapTapRoot(app: DapTapApp) {
                                 onFixNfc = { context.openSettings(Settings.ACTION_NFC_SETTINGS) },
                                 onEnableTap = { app.prefs.updateSettings { it.copy(tapEnabled = true) } },
                                 onAddPhoto = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                lastSwap = people.firstOrNull()?.let { p ->
+                                    val who = p.card.firstName.ifBlank { p.card.name.ifBlank { "Someone" } }
+                                    val time = android.text.format.DateUtils.getRelativeTimeSpanString(
+                                        p.at, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS)
+                                    "$who · $time"
+                                },
+                                peopleCount = people.size,
                             )
                         },
                         people = { padding ->
@@ -425,16 +432,17 @@ private fun Tabs(
     people: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit,
     settings: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit,
 ) {
-    val ground = LocalGround.current
     val onCard = tab == Tab.CARD
+    // Card and People are the wallet itself; Settings is a plain Material screen.
+    val inWallet = tab != Tab.SETTINGS
     BackHandler(enabled = !onCard) { onTab(Tab.CARD) }
     Scaffold(
-        containerColor = if (onCard) ground.color else MaterialTheme.colorScheme.background,
+        containerColor = if (inWallet) Wallet.navyBottom else MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar(containerColor = if (onCard) ground.raised else MaterialTheme.colorScheme.surfaceContainer) {
-                val colors = if (onCard) NavigationBarItemDefaults.colors(
-                    selectedIconColor = ground.color, selectedTextColor = ground.ink,
-                    indicatorColor = ground.ink, unselectedIconColor = ground.inkSoft, unselectedTextColor = ground.inkSoft,
+            NavigationBar(containerColor = if (inWallet) Wallet.dock else MaterialTheme.colorScheme.surfaceContainer) {
+                val colors = if (inWallet) NavigationBarItemDefaults.colors(
+                    selectedIconColor = Wallet.navyTop, selectedTextColor = Wallet.ink,
+                    indicatorColor = Wallet.ink, unselectedIconColor = Wallet.inkSoft, unselectedTextColor = Wallet.inkSoft,
                 ) else NavigationBarItemDefaults.colors()
                 listOf(
                     Triple(Tab.CARD, "Card", Icons.Outlined.Badge),

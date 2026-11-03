@@ -1,5 +1,7 @@
 package com.keshav.daptap.overlay
 
+import com.keshav.daptap.ui.walletGround
+
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
@@ -168,17 +170,31 @@ class OverlayController(private val app: DapTapApp) {
             if (reduce) return@LaunchedEffect
             while (true) { wave.snapTo(0f); wave.animateTo(1f, tween(1600, easing = LinearEasing)); delay(400) }
         }
-        Box(Modifier.fillMaxSize().background(ground.color).clickable(enabled = false) {}) {
-            ConstructionGrid(12.dp, ground.line, Modifier.matchParentSize(),
-                wave = if (reduce || c.person != null) -1f else wave.value, origin = Offset(0.5f, 0.5f))
-            Column(Modifier.align(androidx.compose.ui.Alignment.CenterStart).padding(horizontal = 28.dp)) {
+        val person0 = c.person
+        Box(Modifier.fillMaxSize().walletGround().clickable(enabled = false) {}) {
+            com.keshav.daptap.ui.GlassPass(
+                if (person0 != null) com.keshav.daptap.ui.Grounds.of(person0.card.label) else ground,
+                Modifier.align(androidx.compose.ui.Alignment.Center).fillMaxWidth().padding(horizontal = 16.dp),
+                stubHeight = com.keshav.daptap.ui.STUB_HEIGHT,
+                shine = if (reduce || person0 != null) -1f else wave.value,
+            ) {
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp)) {
                 val person = c.person
+                com.keshav.daptap.ui.PassHead("NAMEDROP", "IPHONE")
+                Spacer(Modifier.height(20.dp))
                 if (person == null) {
-                    CellName("SWAP", ground.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
+                    CellName("SWAP", com.keshav.daptap.ui.Wallet.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
                     Spacer(Modifier.height(20.dp))
-                    Text("Swapping with the iPhone", color = ground.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Swapping with the iPhone", color = com.keshav.daptap.ui.Wallet.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
-                    Text("Ask them to tap Share. Keep the phones close.", color = ground.inkSoft, fontSize = 16.sp, lineHeight = 22.sp)
+                    Text("Keep the phones close.", color = com.keshav.daptap.ui.Wallet.inkSoft, fontSize = 16.sp, lineHeight = 22.sp)
+                    Spacer(Modifier.height(24.dp))
+                    Box(Modifier.height(com.keshav.daptap.ui.STUB_HEIGHT), contentAlignment = androidx.compose.ui.Alignment.CenterStart) {
+                        Column {
+                            Text("WAITING FOR THEM", style = com.keshav.daptap.ui.Wallet.tabCaps.copy(color = com.keshav.daptap.ui.Wallet.ink, fontSize = 13.sp))
+                            Text("Ask them to tap Share on their iPhone", color = com.keshav.daptap.ui.Wallet.inkSoft, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
                 } else {
                     c.photo?.let { img ->
                         androidx.compose.foundation.Image(img, null, Modifier.height(120.dp).aspectRatio(1f).clip(RoundedCornerShape(24.dp)),
@@ -186,15 +202,23 @@ class OverlayController(private val app: DapTapApp) {
                         Spacer(Modifier.height(20.dp))
                     }
                     val first = person.card.firstName.ifBlank { person.card.name }.ifBlank { "GOT IT" }
-                    CellName(first.uppercase(), ground.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
+                    CellName(first.uppercase(), com.keshav.daptap.ui.Wallet.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
                     Spacer(Modifier.height(20.dp))
                     Text(if (person.card.name.isBlank()) "Got their card" else "Got ${person.card.name}'s card",
-                        color = ground.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Finishing the swap…", color = ground.inkSoft, fontSize = 16.sp, lineHeight = 22.sp)
+                        color = com.keshav.daptap.ui.Wallet.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(24.dp))
+                    androidx.compose.foundation.layout.Row(Modifier.height(com.keshav.daptap.ui.STUB_HEIGHT).fillMaxWidth(),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("FINISHING THE SWAP", style = com.keshav.daptap.ui.Wallet.tabCaps.copy(color = com.keshav.daptap.ui.Wallet.ink, fontSize = 13.sp))
+                            Text("Sending yours back…", color = com.keshav.daptap.ui.Wallet.inkSoft, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        com.keshav.daptap.ui.Stamp("RECEIVED")
+                    }
                 }
             }
-            Text("Cancel", color = ground.ink, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+            }
+            Text("Cancel", color = com.keshav.daptap.ui.Wallet.ink, fontSize = 16.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter).navigationBarsPadding()
                     .padding(bottom = 28.dp).clip(RoundedCornerShape(20.dp)).clickable(onClick = ::cancelSwap)
                     .padding(horizontal = 24.dp, vertical = 12.dp))
@@ -214,13 +238,14 @@ class OverlayController(private val app: DapTapApp) {
             build.snapTo(0f)
             build.animateTo(1f, tween(900, delayMillis = 250, easing = FastOutSlowInEasing))
         }
+        // Over another app the backdrop is unknown, so the glass sits on its own navy plate.
         Box(
             Modifier.fillMaxWidth().statusBarsPadding().padding(10.dp)
-                .clip(RoundedCornerShape(22.dp)).background(ground.color)
+                .clip(RoundedCornerShape(22.dp)).background(com.keshav.daptap.ui.Wallet.ground)
                 .clickable(onClick = ::openApp)
         ) {
-            ConstructionGrid(10.dp, ground.line, Modifier.matchParentSize(),
-                wave = if (reduce) -1f else wave.value, origin = Offset(0.5f, 1f))
+            com.keshav.daptap.ui.GlassPass(ground, Modifier.matchParentSize(), corner = 22.dp,
+                shine = if (reduce) -1f else wave.value) {}
             Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
                 val (word, title, body) = when (c) {
                     is OverlayContent.Card -> Triple(c.person.card.firstName.ifBlank { c.person.card.name },
@@ -235,10 +260,10 @@ class OverlayController(private val app: DapTapApp) {
                         else -> Triple("DAP", "Hold steady", "Sharing your card…")
                     }
                 }
-                CellName(word, ground.ink, maxCell = 9.dp, progress = build.value, origin = Offset(0.5f, 1f))
+                CellName(word, com.keshav.daptap.ui.Wallet.ink, maxCell = 9.dp, progress = build.value, origin = Offset(0.5f, 1f))
                 Spacer(Modifier.height(14.dp))
-                Text(title, color = ground.ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                Text(body, color = ground.inkSoft, fontSize = 14.sp, lineHeight = 19.sp)
+                Text(title, color = com.keshav.daptap.ui.Wallet.ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(body, color = com.keshav.daptap.ui.Wallet.inkSoft, fontSize = 14.sp, lineHeight = 19.sp)
             }
         }
     }
