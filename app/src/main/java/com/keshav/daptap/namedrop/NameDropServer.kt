@@ -37,6 +37,8 @@ class NameDropServer(
 ) {
     private var connector: ServerConnector? = null
     private var socket: DatagramSocket? = null
+    /** Ties the socket to the Apple link's network so replies can leave on it (see LinkRoute). */
+    private var binder: ((DatagramSocket) -> Unit)? = null
     private val workers = Executors.newCachedThreadPool { r -> Thread(r, "daptap-namedrop-h3").apply { isDaemon = true } }
 
     @Synchronized
@@ -50,6 +52,7 @@ class NameDropServer(
             val pw = "daptap".toCharArray()
             val ks = KeyStore.getInstance("PKCS12").apply { load(null, null); setKeyEntry("namedrop", privateKey, pw, arrayOf(cert)) }
             val s = DatagramSocket(null).apply { reuseAddress = true; bind(InetSocketAddress(PORT)) }
+            binder?.let { b -> runCatching { b(s) }.onFailure { log("NameDrop server: couldn't use the Apple link (${it.message})") } }
             val config = ServerConnectionConfig.builder()
                 .maxIdleTimeoutInSeconds(30)
                 .maxOpenPeerInitiatedBidirectionalStreams(16)
@@ -73,6 +76,14 @@ class NameDropServer(
             log("NameDrop server listening on UDP $PORT")
             true
         }.getOrElse { log("NameDrop server failed to start: ${it.javaClass.simpleName}: ${it.message}"); stop(); false }
+    }
+
+    /** Route replies through [b] (applied now if running, and on every start). */
+    @Synchronized
+    fun routeVia(b: (DatagramSocket) -> Unit) {
+        binder = b
+        socket?.let { s -> runCatching { b(s); log("NameDrop server: replies now go over the Apple link") }
+            .onFailure { log("NameDrop server: couldn't use the Apple link (${it.javaClass.simpleName}: ${it.message})") } }
     }
 
     @Synchronized

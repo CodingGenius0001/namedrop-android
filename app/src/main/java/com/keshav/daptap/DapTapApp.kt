@@ -41,6 +41,10 @@ class DapTapApp : Application() {
                 " · NameDrop beacon supported: ${com.keshav.daptap.nfc.NameDropBeacon.isSupported(android.nfc.NfcAdapter.getDefaultAdapter(this))}" +
                 " · settings ${prefs.settings.value}"
         }.also { it.start(scope) }
+        val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
+            onPeerNetwork = { iface, network -> engine.useAppleLinkNetwork(iface, network) }
+            watch()
+        }
         val peerLink = com.keshav.daptap.diag.PeerLink(engine::log) {
             runCatching { com.keshav.daptap.nfc.SnapKeys.get(this).first.uuidString }.getOrNull()
         }
@@ -48,8 +52,11 @@ class DapTapApp : Application() {
             onUp = { ni ->
                 if (com.keshav.daptap.diag.PeerLink.isPeerLink(ni.name)) {
                     scope.launch { engine.keepProbe(true) }
-                    logNetworkFor(ni.name)
                     peerLink.up(ni)
+                    scope.launch(Dispatchers.IO) {
+                        linkRoute.networkFor(ni.name)?.let { engine.useAppleLinkNetwork(ni.name, it) }
+                        linkRoute.probe(ni)
+                    }
                 }
             },
             onGone = { name ->
@@ -78,15 +85,6 @@ class DapTapApp : Application() {
     }
 
     /** Whether Android registered the peer link as a Network (then sockets and NSD can be pinned to it). */
-    private fun logNetworkFor(name: String) {
-        runCatching {
-            val cm = getSystemService(android.net.ConnectivityManager::class.java)
-            @Suppress("DEPRECATION")
-            val match = cm.allNetworks.mapNotNull { n -> cm.getLinkProperties(n)?.takeIf { it.interfaceName == name }?.let { n to it } }
-            if (match.isEmpty()) engine.log("peer link $name: not an Android Network visible to apps")
-            match.forEach { (n, lp) -> engine.log("peer link $name: Android Network $n caps=${cm.getNetworkCapabilities(n)} addrs=${lp.linkAddresses}") }
-        }.onFailure { engine.log("peer link $name: network lookup failed (${it.message})") }
-    }
 
     private val crashFile get() = java.io.File(filesDir, "last-crash.txt")
 

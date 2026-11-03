@@ -129,6 +129,14 @@ class TapEngine(
 
     private fun stopNameDropServer() { runCatching { nameDropServer.stop() } }
 
+    /** The Apple link has an Android network: send the exchange server's replies through it. */
+    fun useAppleLinkNetwork(iface: String, network: android.net.Network) {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { nameDropServer.routeVia { s -> network.bindSocket(s) } }
+            log("NameDrop server: using Android network $network for $iface")
+        }
+    }
+
     /** Our card as the iPhone gets it in /Exchange: a vCard with the photo, CRLF line ends. */
     private fun nameDropCard(): com.keshav.daptap.namedrop.Exchange.Card {
         val card = prefs.card.value

@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Testing mode only: keeps the tap log uploading while another app is on screen. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

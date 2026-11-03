@@ -38,6 +38,12 @@ class SimulatedReader : BroadcastReceiver() {
             t("KA XDH") { val a = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); val b = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); javax.crypto.KeyAgreement.getInstance("XDH").run { init(a.private); doPhase(b.public, true); generateSecret().size } }
             return
         }
+        intent.getStringExtra("routeprobe")?.let { name ->
+            Thread {
+                val r = com.keshav.daptap.namedrop.LinkRoute(context.applicationContext) { Log.i("DapTapSim", it) }
+                java.net.NetworkInterface.getByName(name)?.let(r::probe) ?: Log.i("DapTapSim", "no interface $name")
+            }.start()
+        }
         if (intent.getBooleanExtra("loopback", false)) {
             Thread { Thread.sleep(1500); com.keshav.daptap.namedrop.LoopbackIphone.run { Log.i("DapTapSim", "loopback: $it") } }.start()
         }
