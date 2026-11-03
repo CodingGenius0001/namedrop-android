@@ -19,6 +19,8 @@ class Exchange(
     private val ours: () -> Card,
     private val onCard: (vcard: ByteArray, fullName: String?) -> Unit,
     private val log: (String) -> Unit,
+    /** The /Exchange step is answered: the swap is over from our side. */
+    private val onDone: () -> Unit = {},
 ) {
     class Card(val fullName: String, val email: String?, val phone: String?, val vcard: ByteArray)
 
@@ -59,6 +61,7 @@ class Exchange(
                     put("Handle", handle)
                     put("VCardData", NSData(card.vcard))
                 }
+                onDone()
                 Response(200, plist(resp), closeAfter = true)
             }
             p.endsWith("discover") -> Response(200, plist(NSDictionary().apply {

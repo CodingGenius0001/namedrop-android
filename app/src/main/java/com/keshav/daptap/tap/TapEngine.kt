@@ -53,6 +53,8 @@ class TapEngine(
         fun appInForeground(): Boolean = true
         fun showOverlay(phase: Phase) {}
         fun launchQuickShare(card: ContactCard, photo: ByteArray?): Boolean = false
+        /** Cover the screen with DapTap's own "swapping with iPhone" view (Quick Share runs underneath). */
+        fun coverAppleLink(on: Boolean): Boolean = false
         fun notifyIncoming(person: Person) {}
     }
 
@@ -120,7 +122,7 @@ class TapEngine(
         val pkcs8 = checkNotNull(com.keshav.daptap.nfc.SnapKeys.privateKey(context)) { "no NameDrop key" }
         val key = java.security.KeyFactory.getInstance("EC").generatePrivate(java.security.spec.PKCS8EncodedKeySpec(pkcs8))
         com.keshav.daptap.namedrop.NameDropServer(id.spki, key, id.uuidString.lowercase() + ".local",
-            com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log), ::log) { relaySocketProvider?.invoke() }
+            com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log, onDone = ::finishAppleLink), ::log) { relaySocketProvider?.invoke() }
     }
     /** Set by the app: a socket through the iPhone link helper when it's running. */
     @Volatile var relaySocketProvider: (() -> java.net.DatagramSocket?)? = null
@@ -169,11 +171,6 @@ class TapEngine(
             val card = if (parsed.card.name.isBlank() && !fullName.isNullOrBlank()) parsed.card.copy(name = fullName) else parsed.card
             log("NameDrop: got ${card.name.ifBlank { "a card without a name" }} from the iPhone")
             receiveVCard(card, parsed.photo, "namedrop")
-            // Quick Share is on screen (it brought the Apple link up); come back to show the card.
-            runCatching {
-                context.startActivity(android.content.Intent(context, com.keshav.daptap.MainActivity::class.java)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
-            }
         }
     }
     private var probeStopJob: Job? = null
@@ -298,11 +295,43 @@ class TapEngine(
      * Experiment: only Quick Share brings up the phone's Apple link (mosey0), and the iPhone looks for us on it
      * once Share is tapped. Open Quick Share right after the handshake so the link is up by then.
      */
+    @Volatile private var returnWhenLinkUp = false
+
+    /** The Apple link's network appeared. Without the cover, bring DapTap back over Quick Share now. */
+    fun onAppleLinkUp() {
+        if (!returnWhenLinkUp) return
+        returnWhenLinkUp = false
+        scope.launch { delay(1_500); bringDapTapForward(); log("Apple link is up; brought DapTap back over Quick Share") }
+    }
+
+    /** The NameDrop exchange is over (card received or not): show DapTap again and drop the cover. */
+    private fun finishAppleLink() {
+        returnWhenLinkUp = false
+        scope.launch {
+            bringDapTapForward()
+            delay(400) // DapTap first, then uncover, so Quick Share never flashes
+            feedback.coverAppleLink(false)
+        }
+    }
+
+    private fun bringDapTapForward() {
+        runCatching {
+            context.startActivity(android.content.Intent(context, com.keshav.daptap.MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        }
+    }
+
     private fun bringUpAppleLink() {
         scope.launch {
             delay(400) // let the NFC exchange close first
+            // Quick Share only raises the Apple link while it's on screen. DapTap covers it with its own view so the
+            // user never sees Quick Share; without the overlay permission, DapTap comes back once the link is up.
+            val covered = runCatching { feedback.coverAppleLink(true) }.getOrDefault(false)
+            returnWhenLinkUp = !covered
             val opened = runCatching { feedback.launchQuickShare(prefs.card.value, Photos.readMine(context)) }.getOrDefault(false)
-            log(if (opened) "opened Quick Share to bring up the Apple link (don't pick anyone; tap Share on the iPhone)" else "couldn't open Quick Share for the Apple link")
+            log(if (opened) "opened Quick Share to bring up the Apple link (${if (covered) "covered by DapTap" else "DapTap returns once the link is up"})"
+                else "couldn't open Quick Share for the Apple link")
+            if (!opened) { feedback.coverAppleLink(false); returnWhenLinkUp = false }
         }
     }
 

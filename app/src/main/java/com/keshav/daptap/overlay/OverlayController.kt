@@ -15,7 +15,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -67,9 +69,22 @@ class OverlayController(private val app: DapTapApp) {
     private sealed interface OverlayContent {
         data class Tap(val phase: TapEngine.Phase, val ground: Ground, val seq: Long) : OverlayContent
         data class Card(val person: Person, val ground: Ground) : OverlayContent
+        /** Full screen, over Quick Share while it holds the Apple link up for an iPhone swap. */
+        data class Cover(val ground: Ground) : OverlayContent
+    }
+    private val covering get() = content.value is OverlayContent.Cover
+
+    fun showCover() {
+        detach()
+        content.value = OverlayContent.Cover(Grounds.of(app.prefs.card.value.label))
+        attach(fullScreen = true)
+        scheduleHide(COVER_MAX_MS) { openApp() }
     }
 
+    fun hideCover() { if (covering) detach() }
+
     fun show(phase: TapEngine.Phase) {
+        if (covering) return
         val ground = Grounds.of(app.prefs.card.value.label)
         content.value = OverlayContent.Tap(phase, ground, System.nanoTime())
         attach()
@@ -77,37 +92,40 @@ class OverlayController(private val app: DapTapApp) {
     }
 
     fun showIncoming(person: Person) {
+        if (covering) return // DapTap itself comes forward with the card
         content.value = OverlayContent.Card(person, Grounds.of(person.card.label))
         attach()
         scheduleHide(7_000)
     }
 
-    private fun scheduleHide(ms: Long) {
+    private fun scheduleHide(ms: Long, then: () -> Unit = {}) {
         hideJob?.cancel()
-        hideJob = app.scope.launch { delay(ms); detach() }
+        hideJob = app.scope.launch { delay(ms); hideJob = null; detach(); then() }
     }
 
-    private fun attach() {
+    private fun attach(fullScreen: Boolean = false) {
         if (view != null) return
         val o = OverlayOwner().also { it.start() }
         val v = ComposeView(app).apply {
             setViewTreeLifecycleOwner(o)
             setViewTreeSavedStateRegistryOwner(o)
-            setContent { Banner() }
+            setContent { if (fullScreen) Cover() else Banner() }
         }
         val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            if (fullScreen) WindowManager.LayoutParams.MATCH_PARENT else WindowManager.LayoutParams.WRAP_CONTENT,
             type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                (if (fullScreen) WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS else 0),
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.TOP }
         runCatching { wm.addView(v, lp) }.onSuccess { view = v; owner = o }.onFailure { o.stop() }
     }
 
     private fun detach() {
+        hideJob?.cancel()
         view?.let { runCatching { wm.removeView(it) } }
         owner?.stop()
         view = null
@@ -123,10 +141,38 @@ class OverlayController(private val app: DapTapApp) {
         }
     }
 
+    /** DapTap's own screen over Quick Share during an iPhone swap. Tapping Cancel returns to DapTap. */
+    @Composable
+    private fun Cover() {
+        val c = content.value as? OverlayContent.Cover ?: return
+        val ground = c.ground
+        val reduce = remember { reducedMotion(app) }
+        val wave = remember { Animatable(0f) }
+        LaunchedEffect(c) {
+            if (reduce) return@LaunchedEffect
+            while (true) { wave.snapTo(0f); wave.animateTo(1f, tween(1600, easing = LinearEasing)); delay(400) }
+        }
+        Box(Modifier.fillMaxSize().background(ground.color).clickable(enabled = false) {}) {
+            ConstructionGrid(12.dp, ground.line, Modifier.matchParentSize(),
+                wave = if (reduce) -1f else wave.value, origin = Offset(0.5f, 0.5f))
+            Column(Modifier.align(androidx.compose.ui.Alignment.CenterStart).padding(horizontal = 28.dp)) {
+                CellName("SWAP", ground.ink, maxCell = 14.dp, origin = Offset(0f, 0.5f))
+                Spacer(Modifier.height(20.dp))
+                Text("Swapping with the iPhone", color = ground.ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                Text("Ask them to tap Share. Keep the phones close.", color = ground.inkSoft, fontSize = 16.sp, lineHeight = 22.sp)
+            }
+            Text("Cancel", color = ground.ink, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter).navigationBarsPadding()
+                    .padding(bottom = 28.dp).clip(RoundedCornerShape(20.dp)).clickable(onClick = ::openApp)
+                    .padding(horizontal = 24.dp, vertical = 12.dp))
+        }
+    }
+
     @Composable
     private fun Banner() {
         val c = content.value ?: return
-        val ground = when (c) { is OverlayContent.Tap -> c.ground; is OverlayContent.Card -> c.ground }
+        val ground = when (c) { is OverlayContent.Tap -> c.ground; is OverlayContent.Card -> c.ground; is OverlayContent.Cover -> return }
         val reduce = remember { reducedMotion(app) }
         val wave = remember { Animatable(0f) }
         val build = remember { Animatable(if (reduce) 1f else 0f) }
@@ -147,6 +193,7 @@ class OverlayController(private val app: DapTapApp) {
                 val (word, title, body) = when (c) {
                     is OverlayContent.Card -> Triple(c.person.card.firstName.ifBlank { c.person.card.name },
                         "${c.person.card.name} shared their card", "Tap to save them")
+                    is OverlayContent.Cover -> return@Column
                     is OverlayContent.Tap -> when (val p = c.phase) {
                         is TapEngine.Phase.Sent -> when {
                             p.airDrop -> Triple("SENT", "Your card is on its way", "They'll see an AirDrop request. Pick their iPhone in Quick Share if asked.")
@@ -162,6 +209,11 @@ class OverlayController(private val app: DapTapApp) {
                 Text(body, color = ground.inkSoft, fontSize = 14.sp, lineHeight = 19.sp)
             }
         }
+    }
+
+    private companion object {
+        /** Give up covering after this long (the iPhone never tapped Share) and return to DapTap. */
+        const val COVER_MAX_MS = 75_000L
     }
 
     private class OverlayOwner : LifecycleOwner, SavedStateRegistryOwner {

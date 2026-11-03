@@ -70,6 +70,13 @@ class AndroidFeedback(private val app: DapTapApp) : TapEngine.Feedback {
         return ok
     }
 
+    override fun coverAppleLink(on: Boolean): Boolean {
+        if (!on) { overlay.hideCover(); return false }
+        if (!Settings.canDrawOverlays(app)) return false
+        overlay.showCover()
+        return true
+    }
+
     override fun notifyIncoming(person: Person) {
         Notifications.incoming(app, person)
         if (Settings.canDrawOverlays(app) && app.prefs.settings.value.overlay) overlay.showIncoming(person)

@@ -53,7 +53,7 @@ class DapTapApp : Application() {
             }
         }
         val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
-            onPeerNetwork = { iface, network -> bindHelper(iface, network); engine.useAppleLinkNetwork(iface, network) }
+            onPeerNetwork = { iface, network -> bindHelper(iface, network); engine.useAppleLinkNetwork(iface, network); engine.onAppleLinkUp() }
             watch()
         }
         scope.launch {
