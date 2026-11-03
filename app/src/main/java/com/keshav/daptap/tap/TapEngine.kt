@@ -160,8 +160,15 @@ class TapEngine(
         val parsed = VCard.parse(String(vcard, Charsets.UTF_8))
         scope.launch {
             if (parsed == null) { log("NameDrop: couldn't read the iPhone's card (${vcard.size} B)"); return@launch }
-            log("NameDrop: got ${parsed.card.name.ifBlank { fullName ?: "a card" }} from the iPhone")
-            receiveVCard(parsed.card, parsed.photo, "namedrop")
+            // Which vCard properties the iPhone sent (names and sizes only), for debugging.
+            log("NameDrop: card properties " + String(vcard, Charsets.UTF_8).lineSequence()
+                .filter { it.isNotEmpty() && !it[0].isWhitespace() && it.contains(':') }
+                .map { it.substringBefore(':').substringBefore(';') + "(" + it.substringAfter(':').length + ")" }
+                .joinToString(" ").take(600))
+            // An iPhone may send its card without a name; fall back to the name it gave the exchange.
+            val card = if (parsed.card.name.isBlank() && !fullName.isNullOrBlank()) parsed.card.copy(name = fullName) else parsed.card
+            log("NameDrop: got ${card.name.ifBlank { "a card without a name" }} from the iPhone")
+            receiveVCard(card, parsed.photo, "namedrop")
             // Quick Share is on screen (it brought the Apple link up); come back to show the card.
             runCatching {
                 context.startActivity(android.content.Intent(context, com.keshav.daptap.MainActivity::class.java)

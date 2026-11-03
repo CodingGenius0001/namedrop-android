@@ -21,12 +21,17 @@ class Exchange(
     private val log: (String) -> Unit,
 ) {
     class Card(val fullName: String, val email: String?, val phone: String?, val vcard: ByteArray)
+
+    /** The sending iPhone's device name from /Ask ("Jash’s iPhone"), a fallback for the card's name. */
+    @Volatile private var senderDevice: String? = null
     class Response(val status: Int, val body: ByteArray, val closeAfter: Boolean = false)
 
     fun handle(method: String?, path: String?, body: ByteArray): Response {
         val p = (path ?: "").trimEnd('/').lowercase()
         val req = runCatching { if (body.isEmpty()) null else PropertyListParser.parse(body) as? NSDictionary }.getOrNull()
         log("NameDrop exchange: ${method ?: "?"} ${path ?: "?"} (${body.size} B${req?.let { ", keys " + it.allKeys().joinToString(",") } ?: ""})")
+        // Field names, types and sizes only (no values): where an iPhone puts things, for debugging.
+        req?.let { log("NameDrop exchange: ${p.substringAfterLast('/')} shape ${shape(it, 3)}") }
         return when {
             p.endsWith("hello") -> {
                 val resp = NSDictionary().apply {
@@ -38,7 +43,8 @@ class Exchange(
             }
             p.endsWith("exchange") -> {
                 val vcard = (req?.get("VCardData") as? NSData)?.bytes()
-                val name = (req?.get("FullName") as? NSString)?.content
+                val name = (req?.get("FullName") as? NSString)?.content?.takeIf { it.isNotBlank() }
+                    ?: ownerOf(senderDevice)
                 if (vcard != null) onCard(vcard, name) else log("NameDrop exchange: the iPhone sent no card (Receive Only)")
                 val card = ours()
                 val handle = NSDictionary().apply {
@@ -61,6 +67,7 @@ class Exchange(
                 put("IsAirDropable", true)
             }))
             p.endsWith("ask") -> Response(200, plist(NSDictionary().apply {
+                senderDevice = (req?.get("SenderComputerName") as? NSString)?.content
                 put("ReceiverComputerName", ours().fullName)
                 put("ReceiverModelName", "DapTap")
             }))
@@ -72,4 +79,26 @@ class Exchange(
     }
 
     private fun plist(o: NSObject): ByteArray = BinaryPropertyListWriter.writeToArray(o)
+
+    companion object {
+        /** "Jash’s iPhone" → "Jash"; null when the device name doesn't carry an owner's name. */
+        fun ownerOf(device: String?): String? {
+            val d = device?.trim().orEmpty()
+            Regex("^(.+?)\\s*[’'`]s\\s+(iPhone|iPad)\\b.*$", RegexOption.IGNORE_CASE).find(d)?.let { return it.groupValues[1].trim() }
+            Regex("^(iPhone|iPad)\\s+(de|di|von|van)\\s+(.+)$", RegexOption.IGNORE_CASE).find(d)?.let { return it.groupValues[3].trim() }
+            return null
+        }
+
+        /** A plist's structure: keys, types and sizes, never values. */
+        fun shape(o: NSObject?, depth: Int): String = when (o) {
+            is NSDictionary -> if (depth <= 0) "{${o.count()} keys}" else
+                o.allKeys().sorted().joinToString(", ", "{", "}") { k -> "$k: ${shape(o.get(k), depth - 1)}" }
+            is com.dd.plist.NSArray -> if (depth <= 0 || o.count() == 0) "[${o.count()}]" else "[${o.count()} × ${shape(o.objectAtIndex(0), depth - 1)}]"
+            is NSString -> "str(${o.content.length})"
+            is NSData -> "data(${o.length()})"
+            is NSNumber -> "num"
+            null -> "null"
+            else -> o.javaClass.simpleName
+        }
+    }
 }

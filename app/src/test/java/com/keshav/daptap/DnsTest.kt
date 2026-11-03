@@ -19,3 +19,24 @@ class DnsTest {
         ), m.answers)
     }
 }
+
+class ExchangeNameTest {
+    @Test fun `device names give the owner's name`() {
+        org.junit.Assert.assertEquals("Jash", com.keshav.daptap.namedrop.Exchange.ownerOf("Jash’s iPhone"))
+        org.junit.Assert.assertEquals("Mary Ann", com.keshav.daptap.namedrop.Exchange.ownerOf("Mary Ann's iPhone (2)"))
+        org.junit.Assert.assertEquals("Keshav", com.keshav.daptap.namedrop.Exchange.ownerOf("Keshav’s iPad"))
+        org.junit.Assert.assertEquals("Lucía", com.keshav.daptap.namedrop.Exchange.ownerOf("iPhone de Lucía"))
+        org.junit.Assert.assertNull(com.keshav.daptap.namedrop.Exchange.ownerOf("iPhone"))
+        org.junit.Assert.assertNull(com.keshav.daptap.namedrop.Exchange.ownerOf(null))
+    }
+
+    @Test fun `exchange falls back to the device name when the card has none`() {
+        var got: String? = null
+        val ex = com.keshav.daptap.namedrop.Exchange("ID", { com.keshav.daptap.namedrop.Exchange.Card("Me", null, "1", "BEGIN:VCARD\r\nEND:VCARD\r\n".toByteArray()) },
+            { _, name -> got = name }, {})
+        fun pl(d: com.dd.plist.NSDictionary) = com.dd.plist.BinaryPropertyListWriter.writeToArray(d)
+        ex.handle("POST", "/Ask", pl(com.dd.plist.NSDictionary().apply { put("SenderComputerName", "Jash’s iPhone") }))
+        ex.handle("POST", "/Exchange", pl(com.dd.plist.NSDictionary().apply { put("FullName", ""); put("VCardData", com.dd.plist.NSData("BEGIN:VCARD\r\nTEL:1\r\nEND:VCARD\r\n".toByteArray())) }))
+        org.junit.Assert.assertEquals("Jash", got)
+    }
+}
