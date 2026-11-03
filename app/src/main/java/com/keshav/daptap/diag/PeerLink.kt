@@ -55,12 +55,15 @@ class PeerLink(private val log: (String) -> Unit, private val uuid: () -> String
             val p = DatagramPacket(buf, buf.size)
             if (runCatching { s.receive(p) }.isFailure) break
             packets++
-            val from = p.address?.hostAddress?.substringBefore('%') ?: "?"
+            // The scope suffix (%mosey0 / %wlan0) says which link the packet arrived on.
+            val from = (p.address as? Inet6Address)?.let { a -> a.hostAddress?.substringBefore('%') + "%" + (a.scopedInterface?.name ?: a.scopeId) }
+                ?: p.address?.hostAddress ?: "?"
             if (ownAddress(ni, p.address)) continue
             val msg = runCatching { Dns.parse(p.data, p.length) }.getOrNull()
             val summary = msg?.summary() ?: "${p.length} B (unparsed)"
             // Each distinct thing the iPhone says, once; plus a running count.
-            if (seen.add(summary.take(300))) log("peer link mDNS from $from: $summary")
+            val via = from.substringAfter('%', "")
+            if (seen.add(via + summary.take(300))) log("peer link mDNS from $from: $summary")
             if (packets % 100 == 0) log("peer link: $packets mDNS packets so far")
             val id = uuid() ?: continue
             if (msg != null && !msg.response && msg.questions.any { q -> q.lowercase().let { it.startsWith("_asquic._udp") || it.contains(id.lowercase()) } }) {

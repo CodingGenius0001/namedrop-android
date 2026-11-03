@@ -48,6 +48,7 @@ class DapTapApp : Application() {
             onUp = { ni ->
                 if (com.keshav.daptap.diag.PeerLink.isPeerLink(ni.name)) {
                     scope.launch { engine.keepProbe(true) }
+                    logNetworkFor(ni.name)
                     peerLink.up(ni)
                 }
             },
@@ -74,6 +75,17 @@ class DapTapApp : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: Activity) {}
         })
+    }
+
+    /** Whether Android registered the peer link as a Network (then sockets and NSD can be pinned to it). */
+    private fun logNetworkFor(name: String) {
+        runCatching {
+            val cm = getSystemService(android.net.ConnectivityManager::class.java)
+            @Suppress("DEPRECATION")
+            val match = cm.allNetworks.mapNotNull { n -> cm.getLinkProperties(n)?.takeIf { it.interfaceName == name }?.let { n to it } }
+            if (match.isEmpty()) engine.log("peer link $name: not an Android Network visible to apps")
+            match.forEach { (n, lp) -> engine.log("peer link $name: Android Network $n caps=${cm.getNetworkCapabilities(n)} addrs=${lp.linkAddresses}") }
+        }.onFailure { engine.log("peer link $name: network lookup failed (${it.message})") }
     }
 
     private val crashFile get() = java.io.File(filesDir, "last-crash.txt")

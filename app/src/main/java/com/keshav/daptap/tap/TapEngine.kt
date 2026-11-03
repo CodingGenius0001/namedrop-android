@@ -234,6 +234,18 @@ class TapEngine(
         log("NameDrop: NFC link ended (${if (reason == 0) "lost: phones moved or field dropped" else "iPhone deselected us"})")
     }
 
+    /**
+     * Experiment: only Quick Share brings up the phone's Apple link (mosey0), and the iPhone looks for us on it
+     * once Share is tapped. Open Quick Share right after the handshake so the link is up by then.
+     */
+    private fun bringUpAppleLink() {
+        scope.launch {
+            delay(400) // let the NFC exchange close first
+            val opened = runCatching { feedback.launchQuickShare(prefs.card.value, Photos.readMine(context)) }.getOrDefault(false)
+            log(if (opened) "opened Quick Share to bring up the Apple link (don't pick anyone; tap Share on the iPhone)" else "couldn't open Quick Share for the Apple link")
+        }
+    }
+
     /** Quick Share's Apple link is up: keep the QUIC probe socket listening on it, whatever the beacon does. */
     fun keepProbe(on: Boolean) {
         peerLinkUp = on
@@ -287,6 +299,7 @@ class TapEngine(
                 if (now - nameDropDoneAt > 10_000) {
                     log("NameDrop handshake complete: the iPhone should show its NameDrop card now")
                     _events.tryEmit("NameDrop started on the iPhone")
+                    if (prefs.settings.value.testingMode) bringUpAppleLink()
                 }
                 nameDropDoneAt = now
             }
