@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- Granted by DapTap's own Wireless debugging shell (pm grant), so it can switch Wireless debugging on
+         to restart the iPhone link helper. Not grantable any other way. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Testing mode only: keeps the tap log uploading while another app is on screen. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -27,6 +31,13 @@
         <intent>
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="text/x-vcard" />
+        </intent>
+        <!-- Other NFC card apps, to tell the user when one also claims the tag AID (see nfc.NfcRouting). -->
+        <intent>
+            <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.nfc.cardemulation.action.OFF_HOST_APDU_SERVICE" />
         </intent>
     </queries>
 
@@ -108,6 +119,15 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Developer testing mode: uploads the encrypted NFC debug log while other apps are open" />
+        </service>
+
+        <service
+            android:name=".applink.PairingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="One-time pairing with Wireless debugging: waits for the pairing code while Settings is open" />
         </service>
 
         <service

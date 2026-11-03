@@ -5,15 +5,23 @@ object Type4Reader {
     private fun ok(r: ByteArray?) = r != null && r.size >= 2 && r[r.size - 2] == 0x90.toByte() && r[r.size - 1] == 0x00.toByte()
     private fun body(r: ByteArray) = r.copyOfRange(0, r.size - 2)
 
-    /** Tells a DapTap card we are DapTap too, so it doesn't turn us away as an iPhone. Anything else ignores it. */
-    private fun hello(transceive: (ByteArray) -> ByteArray?) {
-        runCatching { transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + Type4Tag.DAPTAP_AID + 0x00) }
-    }
+    /**
+     * Selects DapTap's own AID: tells a DapTap card we are DapTap too (never an iPhone), and reaches DapTap even
+     * when it's closed and another app also claims the standard tag AID. True if it answered.
+     */
+    private fun hello(transceive: (ByteArray) -> ByteArray?): Boolean =
+        runCatching { ok(transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + Type4Tag.DAPTAP_AID + 0x00)) }.getOrDefault(false)
+
+    private fun selectCc(transceive: (ByteArray) -> ByteArray?) =
+        ok(transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x00, 0x0C, 0x02) + Type4Tag.CC_FILE_ID))
+
+    private fun selectNdefApp(transceive: (ByteArray) -> ByteArray?) =
+        ok(transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + Type4Tag.NDEF_AID + 0x00))
 
     fun read(transceive: (ByteArray) -> ByteArray?): ByteArray? = runCatching {
-        hello(transceive)
-        if (!ok(transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + Type4Tag.NDEF_AID + 0x00))) return null
-        if (!ok(transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x00, 0x0C, 0x02) + Type4Tag.CC_FILE_ID))) return null
+        // Newer DapTap cards serve the tag files under DapTap's AID; older ones and plain tags need the NDEF AID.
+        val viaDaptap = hello(transceive) && selectCc(transceive)
+        if (!viaDaptap && !(selectNdefApp(transceive) && selectCc(transceive))) return null
         val ccResp = transceive(byteArrayOf(0x00, 0xB0.toByte(), 0x00, 0x00, 0x0F))
         if (!ok(ccResp) || ccResp!!.size < 17) return null
         val cc = body(ccResp)
@@ -42,8 +50,7 @@ object Type4Reader {
         if (chunks.isEmpty() || chunks.size > 255) return false
         // Select the DapTap application again: after Android's own tag read (the system dispatch path) the
         // other phone may no longer have it selected. A tag that isn't DapTap simply refuses the push.
-        hello(transceive)
-        if (!ok(transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + Type4Tag.NDEF_AID + 0x00))) return false
+        if (!hello(transceive) && !selectNdefApp(transceive)) return false
         chunks.forEachIndexed { i, c ->
             val last = if (i == chunks.lastIndex) 0x01 else 0x00
             val r = transceive(byteArrayOf(0x80.toByte(), Type4Tag.INS_PUSH.toByte(), i.toByte(), last.toByte(), c.size.toByte()) + c)

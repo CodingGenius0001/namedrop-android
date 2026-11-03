@@ -187,4 +187,37 @@ class TwoWaySwapTest {
         org.junit.Assert.assertEquals("6A86", hex(tag.process(byteArrayOf(0x80.toByte(), 0xDA.toByte(), 3, 0, 1, 7))))
         org.junit.Assert.assertFalse(com.keshav.daptap.core.Type4Reader.push(ByteArray(70_000)) { tag.process(it) })
     }
+
+    @Test fun `a DapTap reader reads and pushes through DapTap's own AID alone`() {
+        val theirs = com.keshav.daptap.core.Ndef.encode(listOf(com.keshav.daptap.core.Ndef.mimeRecord("text/vcard", "BEGIN:VCARD".toByteArray())))
+        var pushed: ByteArray? = null
+        val tag = com.keshav.daptap.core.Type4Tag({ theirs }, object : com.keshav.daptap.core.Type4Tag.Listener {
+            override fun onPeerCard(payload: ByteArray) { pushed = payload }
+        })
+        // Simulates Android routing: the standard tag AID belongs to another app while DapTap is closed.
+        val ndefSelect = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + com.keshav.daptap.core.Type4Tag.NDEF_AID
+        val routed: (ByteArray) -> ByteArray = { apdu ->
+            if (apdu.size >= ndefSelect.size && apdu.copyOf(ndefSelect.size).contentEquals(ndefSelect)) byteArrayOf(0x6A, 0x82.toByte())
+            else tag.process(apdu)
+        }
+        org.junit.Assert.assertArrayEquals(theirs, com.keshav.daptap.core.Type4Reader.read(routed))
+        org.junit.Assert.assertTrue(com.keshav.daptap.core.Type4Reader.push("hi".toByteArray(), routed))
+        org.junit.Assert.assertEquals("hi", String(pushed!!))
+    }
+
+    @Test fun `a card that only answers hello (older DapTap) is still read through the tag AID`() {
+        val theirs = com.keshav.daptap.core.Ndef.encode(listOf(com.keshav.daptap.core.Ndef.mimeRecord("text/vcard", "X".toByteArray())))
+        val tag = com.keshav.daptap.core.Type4Tag({ theirs })
+        var helloSelected = false
+        val old: (ByteArray) -> ByteArray = { apdu ->
+            val hello = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07) + com.keshav.daptap.core.Type4Tag.DAPTAP_AID
+            when {
+                apdu.size >= hello.size && apdu.copyOf(hello.size).contentEquals(hello) -> { helloSelected = true; tag.reset(); byteArrayOf(0x90.toByte(), 0x00) }
+                // Old cards answered hello but kept no application selected, so file selects failed.
+                helloSelected && apdu[1] == 0xA4.toByte() && apdu[2].toInt() == 0 -> { helloSelected = false; byteArrayOf(0x6A, 0x82.toByte()) }
+                else -> { helloSelected = false; tag.process(apdu) }
+            }
+        }
+        org.junit.Assert.assertArrayEquals(theirs, com.keshav.daptap.core.Type4Reader.read(old))
+    }
 }

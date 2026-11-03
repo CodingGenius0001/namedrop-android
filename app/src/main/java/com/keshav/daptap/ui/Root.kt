@@ -247,6 +247,31 @@ fun DapTapRoot(app: DapTapApp) {
         is Updater.State.Failed -> u.message to ("Try again" to { u.release?.let(::startUpdate) ?: checkForUpdate() })
     }
 
+    // The iPhone link (Wireless debugging helper) that lets NameDrop finish on this phone.
+    val link by app.appleLink.state.collectAsState()
+    LaunchedEffect(resumeTick) { app.appleLink.refresh() }
+    fun setUpIphoneLink() {
+        if (Build.VERSION.SDK_INT >= 33 && !status.notificationsAllowed) requestNotifications()
+        com.keshav.daptap.applink.PairingService.start(context)
+        val devOptions = Settings.Global.getInt(context.contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+        if (devOptions) {
+            context.openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+            scope.launch { snackbar.showSnackbar("Turn on Wireless debugging, tap it, then “Pair device with pairing code”. Type the code into DapTap's notification.") }
+        } else {
+            context.openSettings(Settings.ACTION_DEVICE_INFO_SETTINGS)
+            scope.launch { snackbar.showSnackbar("First turn on Developer options: tap Build number 7 times (Software information), then come back and tap Set up again.") }
+        }
+    }
+    val linkRow: Pair<String, Pair<String, () -> Unit>?> = when (link.phase) {
+        com.keshav.daptap.applink.AppleLink.Phase.UNSUPPORTED -> "Needs Android 11 or newer" to null
+        com.keshav.daptap.applink.AppleLink.Phase.NOT_PAIRED ->
+            (link.message ?: "Lets NameDrop finish on this phone. One-time setup with Wireless debugging.") to ("Set up" to ::setUpIphoneLink)
+        com.keshav.daptap.applink.AppleLink.Phase.STOPPED ->
+            (link.message ?: "Not running. Starts on Wi-Fi with Wireless debugging available.") to ("Start" to { scope.launch { app.appleLink.start() }; Unit })
+        com.keshav.daptap.applink.AppleLink.Phase.STARTING -> (link.message ?: "Starting…") to null
+        com.keshav.daptap.applink.AppleLink.Phase.RUNNING -> "On. iPhones can finish NameDrop with this phone." to null
+    }
+
     DapTapTheme(Grounds.of(card.label)) {
         val inc = incoming
         val viewing = viewingId?.let { id -> people.firstOrNull { it.id == id } }
@@ -349,6 +374,8 @@ fun DapTapRoot(app: DapTapApp) {
                                     openOverlay = ::openOverlaySettings,
                                     updateStatus = updateRow.first,
                                     updateAction = updateRow.second,
+                                    linkStatus = linkRow.first,
+                                    linkAction = linkRow.second,
                                     openAccessibility = { context.openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS) },
                                     requestNotifications = ::requestNotifications,
                                     copyLog = {
@@ -460,6 +487,7 @@ private fun readStatus(context: Context): SystemStatus {
         observeModeSupported = observe,
         nameDropSupported = if (Build.VERSION.SDK_INT >= 37) com.keshav.daptap.nfc.NameDropBeacon.isSupported(adapter) else null,
         version = BuildConfig.VERSION_NAME,
+        otherTagApps = if (adapter != null) com.keshav.daptap.nfc.NfcRouting.otherNdefClaimants(context) else emptyList(),
     )
 }
 

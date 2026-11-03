@@ -37,3 +37,9 @@ project and are licensed under the GNU General Public License v3 or later; see
 the header of each file. The patches under patches/ apply to seemoo-lab/owl and
 seemoo-lab/opendrop and inherit those projects' licenses.
 ```
+
+## Wireless debugging client (applink/)
+
+DapTap's own implementation (no code copied) of Android's adb Wireless debugging pairing and TLS transport,
+written from AOSP `packages/modules/adb` (Apache-2.0) and BoringSSL's SPAKE2 (`crypto/curve25519/spake25519.cc`,
+ISC), with libadb-android (Apache-2.0, MuntashirAkon) consulted as a protocol reference.

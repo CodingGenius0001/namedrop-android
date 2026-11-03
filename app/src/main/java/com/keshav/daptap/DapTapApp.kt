@@ -21,6 +21,7 @@ class DapTapApp : Application() {
     lateinit var engine: TapEngine; private set
     lateinit var updater: com.keshav.daptap.update.Updater; private set
     lateinit var logUploader: com.keshav.daptap.diag.LogUploader; private set
+    lateinit var appleLink: com.keshav.daptap.applink.AppleLink; private set
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -41,9 +42,22 @@ class DapTapApp : Application() {
                 " · NameDrop beacon supported: ${com.keshav.daptap.nfc.NameDropBeacon.isSupported(android.nfc.NfcAdapter.getDefaultAdapter(this))}" +
                 " · settings ${prefs.settings.value}"
         }.also { it.start(scope) }
+        appleLink = com.keshav.daptap.applink.AppleLink(this, engine::log) { engine.restartNameDropServer() }
+        engine.relaySocketProvider = {
+            if (appleLink.supported && appleLink.helper.ping(300) != null) appleLink.helper.relaySocket() else null
+        }
+        val bindHelper = { iface: String, network: android.net.Network ->
+            scope.launch(Dispatchers.IO) {
+                if (appleLink.supported) appleLink.helper.bind(network.networkHandle)?.let { engine.log("iPhone link: $iface $it") }
+            }
+        }
         val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
-            onPeerNetwork = { iface, network -> engine.useAppleLinkNetwork(iface, network) }
+            onPeerNetwork = { iface, network -> bindHelper(iface, network); engine.useAppleLinkNetwork(iface, network) }
             watch()
+        }
+        // Bring the iPhone link helper back after a restart or update, if DapTap may switch Wireless debugging on.
+        scope.launch {
+            if (appleLink.supported && !appleLink.refresh() && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start()
         }
         val peerLink = com.keshav.daptap.diag.PeerLink(engine::log) {
             runCatching { com.keshav.daptap.nfc.SnapKeys.get(this).first.uuidString }.getOrNull()
@@ -54,8 +68,8 @@ class DapTapApp : Application() {
                     scope.launch { engine.keepProbe(true) }
                     peerLink.up(ni)
                     scope.launch(Dispatchers.IO) {
-                        linkRoute.networkFor(ni.name)?.let { engine.useAppleLinkNetwork(ni.name, it) }
-                        linkRoute.probe(ni)
+                        linkRoute.networkFor(ni.name)?.let { bindHelper(ni.name, it); engine.useAppleLinkNetwork(ni.name, it) }
+                        linkRoute.probe(ni) { handle, dst -> if (appleLink.supported) appleLink.helper.probe(handle, dst) else null }
                     }
                 }
             },
@@ -65,6 +79,10 @@ class DapTapApp : Application() {
         ).start(scope, prefs.settings.map { it.testingMode })
         scope.launch {
             prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { com.keshav.daptap.diag.TestingService.set(this@DapTapApp, it) }
+        }
+        scope.launch(Dispatchers.IO) {
+            val others = com.keshav.daptap.nfc.NfcRouting.otherNdefClaimants(this@DapTapApp)
+            if (others.isNotEmpty()) engine.log("NFC: other apps also claim the tag AID: ${others.joinToString()}")
         }
         // The NameDrop identity is minted once; do it off the main thread so the NFC service never waits on it.
         scope.launch(Dispatchers.Default) { com.keshav.daptap.nfc.SnapKeys.warm(this@DapTapApp) }

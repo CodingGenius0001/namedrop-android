@@ -49,7 +49,7 @@ class NameDropServerTest {
             onCard = { v, _ -> received = String(v) }, log = { println(it) })
         // Use DapTap's own X25519 provider, as on Android, instead of the JDK's.
         if (System.getenv("DAPTAP_TEST_OWN_XDH") != null) java.security.Security.insertProviderAt(com.keshav.daptap.namedrop.XdhProvider(), 1)
-        val server = NameDropServer(keys.public.encoded, keys.private, "aaaabbbb.local", exchange) { println(it) }
+        val server = NameDropServer(keys.public.encoded, keys.private, "aaaabbbb.local", exchange, log = { println(it) })
         assertTrue(server.start())
         try {
             val p = ProcessBuilder(python, script.path, System.getenv("DAPTAP_FAKE_IPHONE_HOST") ?: "::1", NameDropServer.PORT.toString(), keys.public.encoded.joinToString("") { "%02x".format(it) })

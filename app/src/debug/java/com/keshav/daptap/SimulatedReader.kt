@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import kotlinx.coroutines.launch
 import com.keshav.daptap.core.Ndef
 import com.keshav.daptap.core.Type4Tag
 import java.io.File
@@ -38,6 +39,19 @@ class SimulatedReader : BroadcastReceiver() {
             t("KA XDH") { val a = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); val b = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); javax.crypto.KeyAgreement.getInstance("XDH").run { init(a.private); doPhase(b.public, true); generateSecret().size } }
             return
         }
+        if (intent.getBooleanExtra("applinkstart", false)) {
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            context.getSharedPreferences("daptap_applink", Context.MODE_PRIVATE).edit().putBoolean("paired", true).commit()
+            app.scope.launch { Log.i("DapTapSim", "applink: " + app.appleLink.start()) }
+        }
+        intent.getStringExtra("adbpair")?.let { arg ->
+            val (port, code) = arg.split(":")
+            Thread { Log.i("DapTapSim", "adbpair: " + runCatching { com.keshav.daptap.applink.Adb(context.applicationContext).pair("127.0.0.1", port.toInt(), code); "paired" }.getOrElse { "FAILED ${it.javaClass.simpleName}: ${it.message}" }) }.start()
+        }
+        intent.getStringExtra("adbshell")?.let { arg ->
+            val port = arg.substringBefore(":"); val cmd = arg.substringAfter(":")
+            Thread { Log.i("DapTapSim", "adbshell: " + runCatching { com.keshav.daptap.applink.Adb(context.applicationContext).shell("127.0.0.1", port.toInt(), cmd) }.getOrElse { "FAILED ${it.javaClass.simpleName}: ${it.message}" }) }.start()
+        }
         intent.getStringExtra("routeprobe")?.let { name ->
             Thread {
                 val r = com.keshav.daptap.namedrop.LinkRoute(context.applicationContext) { Log.i("DapTapSim", it) }
@@ -56,7 +70,10 @@ class SimulatedReader : BroadcastReceiver() {
             override fun onPeerCard(payload: ByteArray) = engine.onPushedCard(payload)
         })
         fun x(hex: String) = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        fun send(cmd: ByteArray): ByteArray = tag.process(cmd).also { engine.logApdu(cmd, it) }
+        val t0 = android.os.SystemClock.uptimeMillis()
+        val sinceStart = t0 - android.os.Process.getStartUptimeMillis()
+        val times = ArrayList<Long>()
+        fun send(cmd: ByteArray): ByteArray { val a = android.os.SystemClock.uptimeMillis(); return tag.process(cmd).also { engine.logApdu(cmd, it); times.add(android.os.SystemClock.uptimeMillis() - a) } }
         send(x("00A4040007D276000085010100"))
         send(x("00A4000C02E103"))
         send(x("00B000000F"))
@@ -85,6 +102,7 @@ class SimulatedReader : BroadcastReceiver() {
         }
         File(context.cacheDir, "simulated-read.txt").writeText(first ?: "nothing")
         Log.i("DapTapSim", "read ${body.size()} bytes, first record: $first")
+        Log.i("DapTapSim", "timing: process up ${sinceStart} ms before the first APDU; slowest APDU ${times.maxOrNull()} ms; all ${times.take(8)}")
         // The vCard record exactly as it went over the air, so it can be checked against a Contacts app.
         records.firstOrNull { it.tnf == Ndef.TNF_MIME }?.let { File(context.cacheDir, "simulated-vcard.vcf").writeBytes(it.payload) }
     }

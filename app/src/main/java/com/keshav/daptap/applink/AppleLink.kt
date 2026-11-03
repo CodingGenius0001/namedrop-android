@@ -1,0 +1,121 @@
+package com.keshav.daptap.applink
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
+import com.keshav.daptap.helper.LinkHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.security.SecureRandom
+
+/**
+ * The iPhone link: DapTap's helper, started through the phone's own Wireless debugging, which lets NameDrop
+ * replies leave on the Apple link (see [LinkHelper]). Pairing happens once; after that DapTap starts the
+ * helper itself whenever Wireless debugging is reachable, switching it on and off again when it may.
+ */
+class AppleLink(private val context: Context, private val log: (String) -> Unit, private val onHelperUp: () -> Unit) {
+    enum class Phase { UNSUPPORTED, NOT_PAIRED, STOPPED, STARTING, RUNNING }
+    data class State(val phase: Phase, val message: String? = null)
+
+    private val prefs = context.getSharedPreferences("daptap_applink", Context.MODE_PRIVATE)
+    private val token: ByteArray = prefs.getString("token", null)?.let(LinkHelper::hex)
+        ?: ByteArray(16).also { SecureRandom().nextBytes(it); prefs.edit().putString("token", hex(it)).apply() }
+    val helper = HelperLink(token)
+    private val lock = Mutex()
+
+    private val _state = MutableStateFlow(State(if (supported) Phase.STOPPED else Phase.UNSUPPORTED))
+    val state: StateFlow<State> = _state
+
+    val supported get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    val paired get() = prefs.getBoolean("paired", false)
+    /** Granted by DapTap's own shell once paired; lets it switch Wireless debugging on to restart the helper. */
+    val canToggleWirelessDebugging get() =
+        context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
+
+    /** Whether the helper is up (and the state reflects it). */
+    suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {
+        if (!supported) return@withContext false
+        val s = helper.ping()
+        val ok = s != null && s.protocol == LinkHelper.PROTOCOL
+        if (_state.value.phase != Phase.STARTING) {
+            _state.value = when {
+                ok -> State(Phase.RUNNING)
+                !paired -> State(Phase.NOT_PAIRED)
+                else -> State(Phase.STOPPED, _state.value.message)
+            }
+        }
+        ok
+    }
+
+    /** Pair with the code shown in Wireless debugging, then start the helper. */
+    suspend fun pair(port: Int, code: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching { Adb(context).pair("127.0.0.1", port, code) }
+            .onSuccess { prefs.edit().putBoolean("paired", true).apply(); log("iPhone link: paired with Wireless debugging") }
+            .onFailure { log("iPhone link: pairing failed (${it.message})") }
+    }
+
+    /** Start the helper if it isn't running. Needs Wi-Fi with Wireless debugging on (or switchable on). */
+    suspend fun start(): Result<String> = lock.withLock {
+        withContext(Dispatchers.IO) {
+            if (!supported) return@withContext Result.failure(IllegalStateException("Needs Android 11 or newer"))
+            helper.ping()?.let { s ->
+                if (s.protocol == LinkHelper.PROTOCOL) { _state.value = State(Phase.RUNNING); return@withContext Result.success("already running") }
+                helper.stop() // an older helper from a previous DapTap version
+            }
+            if (!paired) { _state.value = State(Phase.NOT_PAIRED); return@withContext Result.failure(IllegalStateException("not paired")) }
+            _state.value = State(Phase.STARTING, "Starting the iPhone link…")
+            val resolver = context.contentResolver
+            val wasOn = Settings.Global.getInt(resolver, ADB_WIFI, 0) == 1
+            var switchedOn = false
+            val result = runCatching {
+                if (!wasOn && canToggleWirelessDebugging) {
+                    Settings.Global.putInt(resolver, ADB_WIFI, 1)
+                    switchedOn = true
+                }
+                val port = AdbDiscovery.find(context, AdbDiscovery.CONNECT, 10_000)
+                    ?: error(if (switchedOn || wasOn) "Wireless debugging didn't come up. Connect to Wi-Fi and try again."
+                             else "Turn on Wireless debugging (Developer options), on Wi-Fi, then try again.")
+                val apk = context.applicationInfo.sourceDir
+                val cmd = buildString {
+                    append("pm grant ${context.packageName} ${Manifest.permission.WRITE_SECURE_SETTINGS} 2>/dev/null; ")
+                    append("CLASSPATH='$apk' setsid app_process /system/bin ${LinkHelper::class.java.name} ${hex(token)} </dev/null >/dev/null 2>&1 & ")
+                    // adbd kills what's left of the session when the command returns; give the helper time to
+                    // detach into its own session first.
+                    append("sleep 1")
+                }
+                val out = runCatching { Adb(context).shell("127.0.0.1", port, cmd) }.getOrElse {
+                    if (it.message?.contains("pair again") == true) prefs.edit().putBoolean("paired", false).apply()
+                    throw it
+                }
+                if (out.isNotBlank()) log("iPhone link: shell said ${out.trim().take(200)}")
+                var s: HelperLink.Status? = null
+                for (i in 0 until 25) { s = helper.ping(); if (s != null) break; delay(200) }
+                s ?: error("the helper didn't start")
+                "running as uid ${s.uid}"
+            }
+            if (switchedOn) runCatching { Settings.Global.putInt(resolver, ADB_WIFI, 0) }
+            result.onSuccess {
+                log("iPhone link: helper $it")
+                _state.value = State(Phase.RUNNING)
+                onHelperUp()
+            }.onFailure {
+                log("iPhone link: couldn't start the helper (${it.message})")
+                _state.value = State(if (paired) Phase.STOPPED else Phase.NOT_PAIRED, it.message)
+            }
+        }
+    }
+
+    fun setMessage(phase: Phase, message: String?) { _state.value = State(phase, message) }
+
+    companion object {
+        const val ADB_WIFI = "adb_wifi_enabled"
+        fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+    }
+}

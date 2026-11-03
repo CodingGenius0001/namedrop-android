@@ -19,7 +19,10 @@ import java.util.TimeZone
 object SelfCert {
     fun build(spki: ByteArray, privateKey: PrivateKey, hostname: String, now: Long = System.currentTimeMillis()): ByteArray {
         val serial = ByteArray(16).also { SecureRandom().nextBytes(it); it[0] = (it[0].toInt() and 0x7F).toByte() }
-        val ecdsaSha256 = seq(oid(0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02))
+        val rsa = privateKey.algorithm.equals("RSA", true)
+        // ecdsa-with-SHA256 (no parameters) or sha256WithRSAEncryption (NULL parameters).
+        val sigAlg = if (rsa) seq(oid(0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B), byteArrayOf(0x05, 0x00))
+            else seq(oid(0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02))
         val extensions = seq(
             ext(oid(0x55, 0x1D, 0x13), true, seq()), // basicConstraints: CA false
             ext(oid(0x55, 0x1D, 0x0F), true, tlv(0x03, byteArrayOf(0x05, 0xA0.toByte()))), // keyUsage: digitalSignature, keyEncipherment
@@ -32,15 +35,15 @@ object SelfCert {
         val tbs = seq(
             tlv(0xA0, tlv(0x02, byteArrayOf(2))), // v3
             tlv(0x02, BigInteger(1, serial).toByteArray()),
-            ecdsaSha256,
+            sigAlg,
             name(hostname),
             seq(utc(now - DAY), utc(now + 10 * 365 * DAY)),
             name(hostname),
             spki,
             tlv(0xA3, extensions),
         )
-        val sig = Signature.getInstance("SHA256withECDSA").run { initSign(privateKey); update(tbs); sign() }
-        return seq(tbs, ecdsaSha256, tlv(0x03, byteArrayOf(0) + sig))
+        val sig = Signature.getInstance(if (rsa) "SHA256withRSA" else "SHA256withECDSA").run { initSign(privateKey); update(tbs); sign() }
+        return seq(tbs, sigAlg, tlv(0x03, byteArrayOf(0) + sig))
     }
 
     private const val DAY = 86_400_000L
@@ -64,7 +67,8 @@ object SelfCert {
         when {
             n < 0x80 -> out.write(n)
             n < 0x100 -> { out.write(0x81); out.write(n) }
-            else -> { out.write(0x82); out.write(n ushr 8); out.write(n and 0xFF) }
+            n < 0x10000 -> { out.write(0x82); out.write(n ushr 8); out.write(n and 0xFF) }
+            else -> { out.write(0x83); out.write(n ushr 16); out.write((n ushr 8) and 0xFF); out.write(n and 0xFF) }
         }
         out.write(content)
         return out.toByteArray()

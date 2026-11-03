@@ -66,7 +66,7 @@ class LinkRoute(private val context: Context, private val log: (String) -> Unit)
     }.getOrNull()
 
     /** Testing mode: list what's visible and try a unicast send down [ni] each way we have. */
-    fun probe(ni: NetworkInterface) {
+    fun probe(ni: NetworkInterface, helperProbe: ((Long, InetSocketAddress) -> String?)? = null) {
         @Suppress("DEPRECATION")
         val all = runCatching {
             cm.allNetworks.joinToString("; ") { n -> "$n=${cm.getLinkProperties(n)?.interfaceName}" }
@@ -78,6 +78,9 @@ class LinkRoute(private val context: Context, private val log: (String) -> Unit)
         log("route: plain socket -> ${trySend(dst, null)}")
         val n = networkFor(ni.name)
         if (n == null) log("route: no Android network for ${ni.name}") else log("route: socket bound to network $n -> ${trySend(dst, n)}")
+        if (helperProbe != null) {
+            log("route: through the iPhone link helper -> ${helperProbe(n?.networkHandle ?: 0L, InetSocketAddress(dst, 9)) ?: "helper not running"}")
+        }
     }
 
     private fun trySend(dst: Inet6Address, network: Network?): String = runCatching {

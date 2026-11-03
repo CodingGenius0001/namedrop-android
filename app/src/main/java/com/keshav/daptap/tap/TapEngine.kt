@@ -120,7 +120,14 @@ class TapEngine(
         val pkcs8 = checkNotNull(com.keshav.daptap.nfc.SnapKeys.privateKey(context)) { "no NameDrop key" }
         val key = java.security.KeyFactory.getInstance("EC").generatePrivate(java.security.spec.PKCS8EncodedKeySpec(pkcs8))
         com.keshav.daptap.namedrop.NameDropServer(id.spki, key, id.uuidString.lowercase() + ".local",
-            com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log), ::log)
+            com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log), ::log) { relaySocketProvider?.invoke() }
+    }
+    /** Set by the app: a socket through the iPhone link helper when it's running. */
+    @Volatile var relaySocketProvider: (() -> java.net.DatagramSocket?)? = null
+
+    /** The link helper just came up: move the server onto it. */
+    fun restartNameDropServer() {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { nameDropServer.restart() } }
     }
 
     private fun startNameDropServer() {
@@ -133,7 +140,6 @@ class TapEngine(
     fun useAppleLinkNetwork(iface: String, network: android.net.Network) {
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { nameDropServer.routeVia { s -> network.bindSocket(s) } }
-            log("NameDrop server: using Android network $network for $iface")
         }
     }
 

@@ -67,17 +67,16 @@ class Type4Tag(
     private fun select(apdu: ByteArray, p1: Int, p2: Int): ByteArray {
         val data = commandData(apdu) ?: return SW_WRONG_LENGTH
         return when (p1) {
-            0x04 -> if (data.contentEquals(DAPTAP_AID)) {
-                // A DapTap reader says hello before reading, so it is never mistaken for an iPhone.
-                daptapReader = true
-                appSelected = false
-                SW_OK
-            } else if (data.contentEquals(NDEF_AID) && refuseNdef(daptapReader)) {
+            0x04 -> if (data.contentEquals(NDEF_AID) && refuseNdef(daptapReader)) {
                 appSelected = false
                 file = File.NONE
                 listener.onNdefRefused()
                 SW_FILE_NOT_FOUND
-            } else if (data.contentEquals(NDEF_AID)) {
+            } else if (data.contentEquals(NDEF_AID) || data.contentEquals(DAPTAP_AID)) {
+                // A DapTap reader selects DapTap's own AID and reads the same files through it. That AID is
+                // ours alone, so Android routes it to DapTap even when DapTap is closed and another app also
+                // claims the standard tag AID; it also marks the reader as DapTap, never an iPhone.
+                if (data.contentEquals(DAPTAP_AID)) daptapReader = true
                 appSelected = true
                 file = File.NONE
                 readBodyEnd = false

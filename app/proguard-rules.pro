@@ -25,3 +25,6 @@
 # The X25519 JCA provider's engines are instantiated by name through reflection.
 -keep class com.keshav.daptap.namedrop.XdhProvider { *; }
 -keep class com.keshav.daptap.namedrop.XdhProvider$* { *; }
+
+# The iPhone link helper is started by name through app_process (see applink.AppleLink).
+-keep class com.keshav.daptap.helper.LinkHelper { public static void main(java.lang.String[]); }

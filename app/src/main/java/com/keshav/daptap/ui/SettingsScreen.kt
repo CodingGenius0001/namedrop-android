@@ -44,6 +44,8 @@ data class SystemStatus(
     /** Android 17 reader-mode annotations: can this phone emit the NameDrop frame? null = Android < 17. */
     val nameDropSupported: Boolean?,
     val version: String,
+    /** Other apps that also answer NFC tag reads (see nfc.NfcRouting). */
+    val otherTagApps: List<String> = emptyList(),
 )
 
 class SettingsActions(
@@ -60,6 +62,9 @@ class SettingsActions(
     val openSource: () -> Unit,
     val updateStatus: String,
     val updateAction: Pair<String, () -> Unit>?,
+    /** The iPhone link helper (see applink.AppleLink). */
+    val linkStatus: String,
+    val linkAction: Pair<String, () -> Unit>?,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -85,6 +90,14 @@ fun SettingsScreen(
                 when (status.nfc) { NfcState.ON -> "On"; NfcState.OFF -> "Off. DapTap can't be tapped"; NfcState.MISSING -> "This phone has no NFC" },
                 if (status.nfc == NfcState.OFF) "Turn on" to actions.openNfc else null,
             )
+            if (status.otherTagApps.isNotEmpty()) {
+                Status(
+                    "Shared NFC tag",
+                    "${status.otherTagApps.joinToString()} also answers NFC tag reads. Phones without DapTap open may " +
+                        "see an unknown tag when they read yours while DapTap is closed. Phones with DapTap aren't affected.",
+                    null,
+                )
+            }
 
             Section("iPhones")
             Toggle("NameDrop handshake",
@@ -94,6 +107,7 @@ fun SettingsScreen(
                     null -> "Needs Android 17 (One UI 9). Taps still work without it."
                 },
                 settings.nameDropBeacon, enabled = status.nameDropSupported == true) { v -> actions.update { it.copy(nameDropBeacon = v) } }
+            Status("iPhone link", actions.linkStatus, actions.linkAction)
             Toggle("Send with AirDrop after a tap",
                 "Opens Quick Share with your card so the iPhone gets a normal AirDrop request. Their AirDrop must be set to Everyone for 10 minutes.",
                 settings.airDropOnTap) { v -> actions.update { it.copy(airDropOnTap = v) } }
