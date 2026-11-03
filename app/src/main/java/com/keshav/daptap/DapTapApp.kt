@@ -41,7 +41,20 @@ class DapTapApp : Application() {
                 " · NameDrop beacon supported: ${com.keshav.daptap.nfc.NameDropBeacon.isSupported(android.nfc.NfcAdapter.getDefaultAdapter(this))}" +
                 " · settings ${prefs.settings.value}"
         }.also { it.start(scope) }
-        com.keshav.daptap.diag.InterfaceWatch(engine::log).start(scope, prefs.settings.map { it.testingMode })
+        val peerLink = com.keshav.daptap.diag.PeerLink(engine::log) {
+            runCatching { com.keshav.daptap.nfc.SnapKeys.get(this).first.uuidString }.getOrNull()
+        }
+        com.keshav.daptap.diag.InterfaceWatch(engine::log,
+            onUp = { ni ->
+                if (com.keshav.daptap.diag.PeerLink.isPeerLink(ni.name)) {
+                    scope.launch { engine.keepProbe(true) }
+                    peerLink.up(ni)
+                }
+            },
+            onGone = { name ->
+                if (com.keshav.daptap.diag.PeerLink.isPeerLink(name)) { peerLink.down(); scope.launch { engine.keepProbe(false) } }
+            },
+        ).start(scope, prefs.settings.map { it.testingMode })
         scope.launch {
             prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { com.keshav.daptap.diag.TestingService.set(this@DapTapApp, it) }
         }

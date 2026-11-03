@@ -16,7 +16,12 @@ import java.net.NetworkInterface
  * without root. This logs every interface that appears or disappears, so a Quick Share session with an
  * iPhone shows whether such an interface exists.
  */
-class InterfaceWatch(private val log: (String) -> Unit) {
+class InterfaceWatch(
+    private val log: (String) -> Unit,
+    /** An interface came up or its addresses changed. */
+    private val onUp: (NetworkInterface) -> Unit = {},
+    private val onGone: (String) -> Unit = {},
+) {
     fun start(scope: CoroutineScope, enabled: Flow<Boolean>) {
         scope.launch {
             enabled.collectLatest { on ->
@@ -28,8 +33,11 @@ class InterfaceWatch(private val log: (String) -> Unit) {
                     if (before == null) {
                         log("interfaces: " + now.entries.joinToString("; ") { "${it.key} ${it.value}" })
                     } else {
-                        for ((name, desc) in now) if (before[name] != desc) log("interface ${if (name in before) "changed" else "UP"}: $name $desc")
-                        for (name in before.keys - now.keys) log("interface gone: $name")
+                        for (name in before.keys - now.keys) { log("interface gone: $name"); onGone(name) }
+                    }
+                    for ((name, desc) in now) if (before?.get(name) != desc) {
+                        if (before != null) log("interface ${if (name in before) "changed" else "UP"}: $name $desc")
+                        runCatching { NetworkInterface.getByName(name) }.getOrNull()?.let(onUp)
                     }
                     last = now
                     delay(1_500)

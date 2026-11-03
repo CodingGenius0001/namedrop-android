@@ -20,6 +20,14 @@ class SimulatedReader : BroadcastReceiver() {
         if (intent.hasExtra("testing")) app.prefs.updateSettings { it.copy(testingMode = intent.getBooleanExtra("testing", false)) }
         if (intent.hasExtra("airdrop")) app.prefs.updateSettings { it.copy(airDropOnTap = intent.getBooleanExtra("airdrop", true)) }
         val engine = app.engine
+        intent.getStringExtra("peerlink")?.let { name ->
+            Thread {
+                val link = com.keshav.daptap.diag.PeerLink(engine::log) { com.keshav.daptap.nfc.SnapKeys.get(context).first.uuidString }
+                java.net.NetworkInterface.getByName(name)?.let { link.up(it) }
+                Thread.sleep(8_000); link.down()
+            }.start()
+            return
+        }
         if (intent.getBooleanExtra("namedrop", false)) { simulateNameDrop(context, engine); return }
         if (intent.getBooleanExtra("apple", false)) engine.onPollingFrame(byteArrayOf(0x6A, 0x02, 0xC8.toByte(), 0x01, 0x00, 0x00))
         val tag = Type4Tag({ engine.currentMessage() }, object : Type4Tag.Listener {

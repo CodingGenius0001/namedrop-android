@@ -222,7 +222,7 @@ class TapEngine(
         } else {
             // Keep listening a little after a handshake: the iPhone connects only once Share is tapped there.
             val keep = (nameDropDoneAt + PROBE_AFTER_NAMEDROP_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0)
-            probeStopJob = scope.launch { delay(keep); if (!beaconActive) lanProbe.stop() }
+            probeStopJob = scope.launch { delay(keep); if (!beaconActive && !peerLinkUp) lanProbe.stop() }
         }
     }
 
@@ -233,6 +233,18 @@ class TapEngine(
     fun onNameDropLinkEnded(reason: Int) {
         log("NameDrop: NFC link ended (${if (reason == 0) "lost: phones moved or field dropped" else "iPhone deselected us"})")
     }
+
+    /** Quick Share's Apple link is up: keep the QUIC probe socket listening on it, whatever the beacon does. */
+    fun keepProbe(on: Boolean) {
+        peerLinkUp = on
+        if (on) {
+            probeStopJob?.cancel()
+            runCatching { com.keshav.daptap.nfc.SnapKeys.get(context).first.uuidString }.getOrNull()?.let { lanProbe.start(it) }
+        } else if (!beaconActive) {
+            probeStopJob = scope.launch { delay(30_000); if (!beaconActive && !peerLinkUp) lanProbe.stop() }
+        }
+    }
+    @Volatile private var peerLinkUp = false
 
     /** A DapTap phone was just read or pushed to us: let that exchange finish before the next frame. */
     fun beaconOnHold(): Boolean = SystemClock.elapsedRealtime() - maxOf(lastPeerTagAt, lastPushAt) < 2_500
