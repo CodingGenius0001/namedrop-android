@@ -88,7 +88,12 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                 val apk = context.applicationInfo.sourceDir
                 val cmd = buildString {
                     append("pm grant ${context.packageName} ${Manifest.permission.WRITE_SECURE_SETTINGS} 2>/dev/null; ")
-                    append("CLASSPATH='$apk' setsid app_process /system/bin ${LinkHelper::class.java.name} ${hex(token)} </dev/null >/dev/null 2>&1 & ")
+                    // A helper from an older DapTap (or one that stopped answering) still holds the ports. It runs
+                    // under its own process name, so it can be found without matching this command line.
+                    append("p=$(pidof $HELPER_NAME); [ -n \"\$p\" ] && kill \$p; sleep 0.3; ")
+                    // Helpers from DapTap 1.0.24/1.0.25 ran as plain "app_process"; only kill those running our class.
+                    append("for q in $(pidof app_process); do grep -q daptap /proc/\$q/cmdline 2>/dev/null && kill \$q; done; ")
+                    append("CLASSPATH='$apk' setsid app_process /system/bin --nice-name=$HELPER_NAME ${LinkHelper::class.java.name} ${hex(token)} </dev/null >/dev/null 2>&1 & ")
                     // adbd kills what's left of the session when the command returns; give the helper time to
                     // detach into its own session first.
                     append("sleep 1")
@@ -149,6 +154,7 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
 
     companion object {
         const val ADB_WIFI = "adb_wifi_enabled"
+        const val HELPER_NAME = "daptap-link"
         fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     }
 }

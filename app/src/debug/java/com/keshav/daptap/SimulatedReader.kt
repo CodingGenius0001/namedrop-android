@@ -39,6 +39,16 @@ class SimulatedReader : BroadcastReceiver() {
             t("KA XDH") { val a = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); val b = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); javax.crypto.KeyAgreement.getInstance("XDH").run { init(a.private); doPhase(b.public, true); generateSecret().size } }
             return
         }
+        intent.getStringExtra("helperbind")?.let { iface ->
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            Thread {
+                val n = com.keshav.daptap.namedrop.LinkRoute(context.applicationContext) {}.networkFor(iface)
+                Log.i("DapTapSim", "helperbind $iface network=$n handle=${n?.networkHandle}")
+                Log.i("DapTapSim", "helperbind reply: " + n?.let { app.appleLink.helper.bind(it.networkHandle) })
+                Thread.sleep(500)
+                Log.i("DapTapSim", "helperbind after: ping=" + app.appleLink.helper.ping())
+            }.start()
+        }
         if (intent.getBooleanExtra("applinkstart", false)) {
             val app = context.applicationContext as com.keshav.daptap.DapTapApp
             context.getSharedPreferences("daptap_applink", Context.MODE_PRIVATE).edit().putBoolean("paired", true).commit()

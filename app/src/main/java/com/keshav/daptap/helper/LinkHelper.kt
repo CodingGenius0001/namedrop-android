@@ -19,7 +19,7 @@ import kotlin.system.exitProcess
  * Messages (UDP on [::1]:[CONTROL_PORT]): "DT" + token(16) + type(1) + body. See [HelperLink] for the app side.
  */
 object LinkHelper {
-    const val PROTOCOL = 1
+    const val PROTOCOL = 2
     const val CONTROL_PORT = 60193
     const val DATA_PORT = 60192
 
@@ -30,6 +30,9 @@ object LinkHelper {
     @Volatile private var app: SocketAddress? = null
     @Volatile private var data: DatagramSocket? = null
     @Volatile private var lastError = ""
+    /** A network to tie the data socket to, applied by the data thread between receives (see [dataLoop]). */
+    private val pendingBind = java.util.concurrent.SynchronousQueue<Long>()
+    private val bindResult = java.util.concurrent.SynchronousQueue<String>()
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -48,9 +51,12 @@ object LinkHelper {
                 ATTACH -> { app = p.socketAddress; status(control, token, p.socketAddress) }
                 PING -> status(control, token, p.socketAddress)
                 BIND -> {
+                    // Android's DatagramSocket holds its lock while blocked in receive(), so binding it from this
+                    // thread would hang the helper. The data thread does it between receives.
                     val handle = b.getLong()
-                    val r = runCatching { data?.let { Network.fromNetworkHandle(handle).bindSocket(it); "bound to network $handle" } ?: "no data socket yet" }
-                        .getOrElse { "bind failed: ${it.javaClass.simpleName}: ${it.message}" }
+                    val r = if (data == null) "no data socket yet"
+                        else if (!pendingBind.offer(handle, 2, java.util.concurrent.TimeUnit.SECONDS)) "data thread busy"
+                        else bindResult.poll(2, java.util.concurrent.TimeUnit.SECONDS) ?: "bind timed out"
                     reply(control, token, p.socketAddress, BIND, r.toByteArray())
                 }
                 SEND -> {
@@ -84,11 +90,17 @@ object LinkHelper {
             s = runCatching { DatagramSocket(null).apply { reuseAddress = true; bind(InetSocketAddress(DATA_PORT)) } }.getOrNull()
             if (s == null) Thread.sleep(1_000)
         }
+        s.soTimeout = 250
         data = s
         val buf = ByteArray(65536)
         while (true) {
+            pendingBind.poll()?.let { handle ->
+                val r = runCatching { Network.fromNetworkHandle(handle).bindSocket(s); "bound to network $handle" }
+                    .getOrElse { "bind failed: ${it.javaClass.simpleName}: ${it.message}" }
+                bindResult.offer(r, 1, java.util.concurrent.TimeUnit.SECONDS)
+            }
             val p = DatagramPacket(buf, buf.size)
-            if (runCatching { s.receive(p) }.isFailure) { Thread.sleep(100); continue }
+            try { s.receive(p) } catch (_: java.net.SocketTimeoutException) { continue } catch (_: Exception) { Thread.sleep(100); continue }
             val to = app ?: continue
             val from = p.socketAddress as? InetSocketAddress ?: continue
             val out = ByteBuffer.allocate(19 + 22 + p.length)
