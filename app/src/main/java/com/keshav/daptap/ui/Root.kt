@@ -266,7 +266,8 @@ fun DapTapRoot(app: DapTapApp) {
         com.keshav.daptap.applink.AppleLink.Phase.NOT_PAIRED ->
             (link.message ?: "Lets NameDrop finish on this phone. One-time setup with Wireless debugging.") to ("Set up" to ::setUpIphoneLink)
         com.keshav.daptap.applink.AppleLink.Phase.STOPPED ->
-            (link.message ?: "Not running. Turn on Wireless debugging (on Wi-Fi), then tap Start.") to ("Start" to { scope.launch { app.appleLink.start() }; Unit })
+            if (link.needsUser) (link.message ?: "") to ("Open settings" to { context.openSettings(Settings.ACTION_SECURITY_SETTINGS) })
+            else (link.message ?: "Not running. Turn on Wireless debugging (on Wi-Fi), then tap Start.") to ("Start" to { scope.launch { app.appleLink.start() }; Unit })
         com.keshav.daptap.applink.AppleLink.Phase.STARTING -> (link.message ?: "Starting…") to null
         com.keshav.daptap.applink.AppleLink.Phase.OFF ->
             "Off. Replies to iPhones are broadcast instead (experimental)." to ("Turn on" to { scope.launch { app.appleLink.setEnabled(true) }; Unit })

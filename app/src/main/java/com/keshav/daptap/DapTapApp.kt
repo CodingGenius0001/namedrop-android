@@ -135,14 +135,13 @@ class DapTapApp : Application() {
             }
             watch()
         }
+        // Keep the iPhone link up whether or not testing mode is on: bring the helper back after a reboot, an update
+        // (replacing an older one), or something switching debugging off; never in the middle of a swap.
         scope.launch {
-            prefs.settings.map { it.testingMode }.distinctUntilChanged().collectLatest { on -> if (on && appleLink.supported) appleLink.watch() }
-        }
-        // Bring the iPhone link helper back after a restart, or replace one from an older DapTap after an update, if
-        // DapTap may switch Wireless debugging on. An older helper keeps working meanwhile.
-        scope.launch {
-            val up = appleLink.supported && appleLink.refresh()
-            if (appleLink.supported && (!up || appleLink.outdated) && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start()
+            appleLink.refresh()
+            appleLink.supervise(busy = { currentPeerNetwork != null }) { problem ->
+                if (problem != null) Notifications.linkProblem(this@DapTapApp, problem) else Notifications.cancelLinkProblem(this@DapTapApp)
+            }
         }
         // Testing mode: log interface changes, and probe what can be sent on a new Apple link (once per link).
         var probed: String? = null

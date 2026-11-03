@@ -22,7 +22,8 @@ import java.security.SecureRandom
  */
 class AppleLink(private val context: Context, private val log: (String) -> Unit, private val onHelperUp: () -> Unit) {
     enum class Phase { UNSUPPORTED, NOT_PAIRED, OFF, STOPPED, STARTING, RUNNING }
-    data class State(val phase: Phase, val message: String? = null)
+    /** [needsUser]: DapTap can't fix this itself (something keeps switching debugging off); [message] says what to do. */
+    data class State(val phase: Phase, val message: String? = null, val needsUser: Boolean = false)
 
     private val prefs = context.getSharedPreferences("daptap_applink", Context.MODE_PRIVATE)
     private val token: ByteArray = prefs.getString("token", null)?.let(LinkHelper::hex)
@@ -55,9 +56,10 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                 !enabled && paired -> State(Phase.OFF)
                 ok -> State(Phase.RUNNING)
                 !paired -> State(Phase.NOT_PAIRED)
-                else -> State(Phase.STOPPED, _state.value.message)
+                else -> State(Phase.STOPPED, _state.value.message, _state.value.needsUser)
             }
         }
+        if (!ok) poke() // DapTap was opened with the link down: let the supervisor try now rather than on its timer
         ok
     }
 
@@ -82,9 +84,10 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
             val resolver = context.contentResolver
             // The helper lives in adbd's process group: when adbd stops, it goes too. With USB debugging on, adbd
             // keeps running when Wireless debugging goes off (Wi-Fi changes, or the Apple link taking over Wi-Fi).
-            if (Settings.Global.getInt(resolver, Settings.Global.ADB_ENABLED, 0) == 0 && canToggleWirelessDebugging) {
-                runCatching { Settings.Global.putInt(resolver, Settings.Global.ADB_ENABLED, 1) }
-                    .onSuccess { log("iPhone link: turned on USB debugging so the helper outlives Wireless debugging"); delay(2_000) }
+            if (canToggleWirelessDebugging) ensureDebugging()?.let { blocked ->
+                log("iPhone link: USB debugging won't stay on (${adbState()})")
+                _state.value = State(Phase.STOPPED, blocked, needsUser = true)
+                return@withContext Result.failure(IllegalStateException(blocked))
             }
             val wasOn = Settings.Global.getInt(resolver, ADB_WIFI, 0) == 1
             var switchedOn = false
@@ -121,6 +124,9 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                 s ?: error("the helper didn't start")
                 "running as uid ${s.uid} (${adbState()})"
             }
+            // Switched on, and off again by the time we got here: something is turning it off (not a Wi-Fi problem,
+            // or the supervisor wouldn't have tried).
+            val wirelessBlocked = result.isFailure && switchedOn && Settings.Global.getInt(resolver, ADB_WIFI, 0) == 0 && onWifi()
             if (switchedOn) runCatching { Settings.Global.putInt(resolver, ADB_WIFI, 0) }
             result.onSuccess {
                 outdated = false
@@ -134,6 +140,9 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                     log("iPhone link: keeping the running helper (protocol ${old.protocol})")
                     outdated = old.protocol < LinkHelper.PROTOCOL
                     _state.value = State(Phase.RUNNING)
+                } else if (wirelessBlocked) {
+                    log("iPhone link: Wireless debugging won't stay on (${adbState()})")
+                    _state.value = State(Phase.STOPPED, blockedMessage(), needsUser = true)
                 } else {
                     _state.value = State(if (paired) Phase.STOPPED else Phase.NOT_PAIRED, it.message)
                 }
@@ -143,6 +152,104 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
 
     fun setMessage(phase: Phase, message: String?) { _state.value = State(phase, message) }
 
+    /**
+     * Developer options and USB debugging on, switching them back on if something turned them off. Returns what
+     * to tell the user when they won't stay on (on Samsung phones, usually Auto Blocker), else null.
+     */
+    private suspend fun ensureDebugging(): String? {
+        val r = context.contentResolver
+        val dev = Settings.Global.DEVELOPMENT_SETTINGS_ENABLED
+        val usb = Settings.Global.ADB_ENABLED
+        var ok = true
+        if (Settings.Global.getInt(r, dev, 0) == 0) {
+            ok = runCatching { Settings.Global.putInt(r, dev, 1) }.isSuccess
+            if (ok) log("iPhone link: turned Developer options back on")
+        }
+        if (ok && Settings.Global.getInt(r, usb, 0) == 0) {
+            ok = runCatching { Settings.Global.putInt(r, usb, 1) }.isSuccess
+            if (ok) { log("iPhone link: turned on USB debugging so the helper outlives Wireless debugging"); delay(2_000) }
+        }
+        val stuck = !ok || Settings.Global.getInt(r, dev, 0) == 0 || Settings.Global.getInt(r, usb, 0) == 0
+        return if (stuck) blockedMessage() else null
+    }
+
+    private fun blockedMessage(): String =
+        if (Build.MANUFACTURER.equals("samsung", ignoreCase = true))
+            "Something keeps switching off USB debugging, which the iPhone link needs. On Samsung phones this is " +
+                "usually Auto Blocker: turn it off in Settings › Security and privacy › Auto Blocker. DapTap reconnects by itself."
+        else "Something keeps switching off USB debugging, which the iPhone link needs. Turn it back on in Developer " +
+            "options and DapTap reconnects by itself."
+
+    /** Why the helper went away, when it's something DapTap can see. */
+    private fun cause(): String? {
+        val r = context.contentResolver
+        return when {
+            Settings.Global.getInt(r, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 0 -> "Developer options were turned off"
+            Settings.Global.getInt(r, Settings.Global.ADB_ENABLED, 0) == 0 -> "USB debugging was turned off"
+            else -> null
+        }
+    }
+
+    /** Wireless debugging only runs on Wi-Fi (not the Apple link, which is Wi-Fi Aware). */
+    private fun onWifi(): Boolean = runCatching {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        @Suppress("DEPRECATION")
+        cm.allNetworks.any { n ->
+            val caps = cm.getNetworkCapabilities(n)
+            caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+        }
+    }.getOrDefault(true)
+
+    private val pokes = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+
+    /** Check the link now instead of on the supervisor's timer (DapTap opened, a setting changed). */
+    fun poke() { pokes.trySend(Unit) }
+
+    /**
+     * Keeps the iPhone link up, testing mode or not: notices the helper is gone, logs why, and starts it again
+     * (switching debugging back on as needed) with a backoff, never during a swap ([busy]). Also replaces a helper
+     * from an older DapTap. [notify] gets what the user must do when DapTap can't fix it itself, or null.
+     */
+    suspend fun supervise(busy: () -> Boolean, notify: (String?) -> Unit) = withContext(Dispatchers.IO) {
+        if (!supported) return@withContext
+        var wasUp: Boolean? = null
+        var failures = 0
+        var nextTry = 0L
+        var notified: String? = null
+        fun tell(text: String?) { if (text != notified) { notified = text; runCatching { notify(text) } } }
+        while (true) {
+            val s = helper.ping(600)
+            val up = s != null && s.protocol in LinkHelper.MIN_COMPATIBLE..LinkHelper.PROTOCOL
+            if (up) outdated = s!!.protocol < LinkHelper.PROTOCOL
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (up && wasUp == false) log("iPhone link: helper is back · ${adbState()}")
+            if (!up && wasUp != false && paired && enabled) log("iPhone link: helper not running · ${adbState()}${cause()?.let { " · $it" } ?: ""}")
+            if (up) {
+                if (_state.value.phase == Phase.STOPPED) _state.value = State(Phase.RUNNING)
+                tell(null)
+            }
+            val canStart = enabled && paired && canToggleWirelessDebugging
+            if (canStart && (!up || outdated) && !busy() && now >= nextTry) {
+                if (!onWifi()) {
+                    // Nothing to try until Wi-Fi is back (the loop looks again every few seconds).
+                    if (!up && _state.value.phase == Phase.STOPPED && !_state.value.needsUser)
+                        _state.value = State(Phase.STOPPED, "Reconnects by itself the next time this phone is on Wi-Fi.")
+                } else {
+                    val ok = start().isSuccess && helper.ping(600) != null
+                    if (ok) { failures = 0; nextTry = 0; tell(null) } else {
+                        failures++
+                        nextTry = now + BACKOFF_MS[minOf(failures - 1, BACKOFF_MS.size - 1)]
+                        val st = _state.value
+                        if (st.needsUser) tell(st.message)
+                    }
+                }
+            }
+            wasUp = up || helper.ping(300) != null
+            // A poke (DapTap opened) retries at once, even inside the backoff.
+            if (kotlinx.coroutines.withTimeoutOrNull(if (wasUp == true) 5_000L else 3_000L) { pokes.receive() } != null) nextTry = 0
+        }
+    }
+
     /** Switch the helper on (start it) or off (stop it; the NameDrop server then answers without it). */
     suspend fun setEnabled(on: Boolean) {
         prefs.edit().putBoolean("enabled", on).apply()
@@ -151,17 +258,6 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
         log("iPhone link: turned off; replies to iPhones go out by link broadcast instead")
         _state.value = State(Phase.OFF)
         onHelperUp() // restart the NameDrop server without the relay
-    }
-
-    /** Testing mode: logs the moment the helper appears or disappears, with what adbd and Wi-Fi were doing. */
-    suspend fun watch() = withContext(Dispatchers.IO) {
-        var last: Boolean? = null
-        while (true) {
-            val up = helper.ping(600) != null
-            if (up != last && (last != null || up)) log("iPhone link watchdog: helper ${if (up) "up" else "GONE"} · ${adbState()}")
-            last = up
-            delay(1_000)
-        }
     }
 
     fun adbState(): String {
@@ -180,6 +276,8 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
 
     companion object {
         const val ADB_WIFI = "adb_wifi_enabled"
+        /** Waits between failed restarts: 15 s, 30 s, 1 min, 2 min, then every 5 min (a poke retries at once). */
+        private val BACKOFF_MS = longArrayOf(15_000, 30_000, 60_000, 120_000, 300_000)
         const val HELPER_NAME = "daptap-link"
         fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     }

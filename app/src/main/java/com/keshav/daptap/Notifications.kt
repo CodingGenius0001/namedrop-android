@@ -18,9 +18,12 @@ object Notifications {
     const val CHANNEL_TAP = "tap"
     /** High importance so "DapTap updated" is seen: a self-update closes the app with nothing else on screen. */
     const val CHANNEL_UPDATES = "app_updated"
+    /** The iPhone link went down and DapTap can't bring it back by itself. */
+    const val CHANNEL_LINK = "iphone_link"
     private const val ID_INCOMING = 10
     private const val ID_TAP = 11
     private const val ID_UPDATED = 12
+    private const val ID_LINK = 13
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -32,7 +35,27 @@ object Notifications {
         nm.deleteNotificationChannel("updates") // 1.0.6–1.0.7 used a silent channel nobody noticed
         nm.createNotificationChannel(NotificationChannel(CHANNEL_UPDATES, "App updates", NotificationManager.IMPORTANCE_HIGH)
             .apply { description = "DapTap finished updating itself" })
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_LINK, "iPhone link", NotificationManager.IMPORTANCE_DEFAULT)
+            .apply { description = "NameDrop with iPhones stopped working and needs you" })
     }
+
+    /** NameDrop with iPhones is down until the user changes a setting ([text] says which). */
+    fun linkProblem(context: Context, text: String) {
+        if (!canPost(context)) return
+        createChannels(context)
+        val n = NotificationCompat.Builder(context, CHANNEL_LINK)
+            .setSmallIcon(R.drawable.ic_stat_daptap)
+            .setContentTitle("NameDrop with iPhones is off")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(openApp(context))
+            .setOnlyAlertOnce(true)
+            .build()
+        @Suppress("MissingPermission")
+        NotificationManagerCompat.from(context).notify(ID_LINK, n)
+    }
+
+    fun cancelLinkProblem(context: Context) = NotificationManagerCompat.from(context).cancel(ID_LINK)
 
     fun canPost(context: Context) = Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
