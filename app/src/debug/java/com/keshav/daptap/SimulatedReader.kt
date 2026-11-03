@@ -28,6 +28,20 @@ class SimulatedReader : BroadcastReceiver() {
             }.start()
             return
         }
+        if (intent.getBooleanExtra("xdhcheck", false)) {
+            fun t(name: String, f: () -> Any?) = Log.i("DapTapSim", "$name: " + runCatching { f().toString().take(120) }.getOrElse { "FAIL ${it.javaClass.simpleName}: ${it.message}" })
+            t("providers") { java.security.Security.getProviders().joinToString { it.name } }
+            t("KPG XDH+NamedParameterSpec") { java.security.KeyPairGenerator.getInstance("XDH").apply { initialize(java.security.spec.NamedParameterSpec("X25519")) }.generateKeyPair().public.javaClass.name }
+            t("KPG X25519") { java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair().public.let { it.javaClass.name + " " + it.encoded.size + " xec=" + (it is java.security.interfaces.XECPublicKey) } }
+            t("KF XDH XECPublicKeySpec") { java.security.KeyFactory.getInstance("XDH").generatePublic(java.security.spec.XECPublicKeySpec(java.security.spec.NamedParameterSpec("X25519"), java.math.BigInteger.valueOf(9))).javaClass.name }
+            t("KF XDH X509") { val pub = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair().public; java.security.KeyFactory.getInstance("XDH").generatePublic(java.security.spec.X509EncodedKeySpec(pub.encoded)).javaClass.name }
+            t("KA XDH") { val a = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); val b = java.security.KeyPairGenerator.getInstance("X25519").generateKeyPair(); javax.crypto.KeyAgreement.getInstance("XDH").run { init(a.private); doPhase(b.public, true); generateSecret().size } }
+            return
+        }
+        if (intent.getBooleanExtra("loopback", false)) {
+            Thread { Thread.sleep(1500); com.keshav.daptap.namedrop.LoopbackIphone.run { Log.i("DapTapSim", "loopback: $it") } }.start()
+        }
+        if (intent.getBooleanExtra("kwikdebug", false)) System.setProperty("daptap.kwikdebug", "1")
         if (intent.getBooleanExtra("namedrop", false)) { simulateNameDrop(context, engine); return }
         if (intent.getBooleanExtra("apple", false)) engine.onPollingFrame(byteArrayOf(0x6A, 0x02, 0xC8.toByte(), 0x01, 0x00, 0x00))
         val tag = Type4Tag({ engine.currentMessage() }, object : Type4Tag.Listener {

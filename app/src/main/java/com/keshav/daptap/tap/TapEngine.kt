@@ -114,7 +114,44 @@ class TapEngine(
     private val nfcState = context.getSharedPreferences("daptap_nfc", Context.MODE_PRIVATE)
     /** This phone's NFC chip has reported an iPhone's polling frames at least once, so they can be relied on. */
     @Volatile private var framesReliable = nfcState.getBoolean("apple_frames_seen", false)
-    private val lanProbe by lazy { com.keshav.daptap.nfc.LanProbe(context, ::log) }
+    /** Answers the iPhone's NameDrop connection (QUIC + HTTP/3) once it finds us on the Apple link. */
+    private val nameDropServer by lazy {
+        val id = com.keshav.daptap.nfc.SnapKeys.get(context).first
+        val pkcs8 = checkNotNull(com.keshav.daptap.nfc.SnapKeys.privateKey(context)) { "no NameDrop key" }
+        val key = java.security.KeyFactory.getInstance("EC").generatePrivate(java.security.spec.PKCS8EncodedKeySpec(pkcs8))
+        com.keshav.daptap.namedrop.NameDropServer(id.spki, key, id.uuidString.lowercase() + ".local",
+            com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log), ::log)
+    }
+
+    private fun startNameDropServer() {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { nameDropServer.start() }.onFailure { log("NameDrop server: ${it.message}") } }
+    }
+
+    private fun stopNameDropServer() { runCatching { nameDropServer.stop() } }
+
+    /** Our card as the iPhone gets it in /Exchange: a vCard with the photo, CRLF line ends. */
+    private fun nameDropCard(): com.keshav.daptap.namedrop.Exchange.Card {
+        val card = prefs.card.value
+        val photo = Photos.readMine(context)?.let { Photos.thumbnail(it, NAMEDROP_PHOTO_PX, NAMEDROP_PHOTO_MAX) }
+        val text = VCard.write(card, photo).replace("\r\n", "\n").replace("\n", "\r\n")
+        return com.keshav.daptap.namedrop.Exchange.Card(card.name.ifBlank { "DapTap" }, card.email.ifBlank { null },
+            card.phone.ifBlank { null }, text.toByteArray(Charsets.UTF_8))
+    }
+
+    /** The iPhone's card arrived over NameDrop (server thread). */
+    private fun onNameDropCard(vcard: ByteArray, fullName: String?) {
+        val parsed = VCard.parse(String(vcard, Charsets.UTF_8))
+        scope.launch {
+            if (parsed == null) { log("NameDrop: couldn't read the iPhone's card (${vcard.size} B)"); return@launch }
+            log("NameDrop: got ${parsed.card.name.ifBlank { fullName ?: "a card" }} from the iPhone")
+            receiveVCard(parsed.card, parsed.photo, "namedrop")
+            // Quick Share is on screen (it brought the Apple link up); come back to show the card.
+            runCatching {
+                context.startActivity(android.content.Intent(context, com.keshav.daptap.MainActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            }
+        }
+    }
     private var probeStopJob: Job? = null
 
     private var cachedMessage: ByteArray? = null
@@ -217,12 +254,11 @@ class TapEngine(
         beaconActive = on
         probeStopJob?.cancel()
         if (on) {
-            val uuid = runCatching { com.keshav.daptap.nfc.SnapKeys.get(context).first.uuidString }.getOrNull() ?: return
-            lanProbe.start(uuid)
+            startNameDropServer()
         } else {
             // Keep listening a little after a handshake: the iPhone connects only once Share is tapped there.
             val keep = (nameDropDoneAt + PROBE_AFTER_NAMEDROP_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0)
-            probeStopJob = scope.launch { delay(keep); if (!beaconActive && !peerLinkUp) lanProbe.stop() }
+            probeStopJob = scope.launch { delay(keep); if (!beaconActive && !peerLinkUp) stopNameDropServer() }
         }
     }
 
@@ -246,14 +282,14 @@ class TapEngine(
         }
     }
 
-    /** Quick Share's Apple link is up: keep the QUIC probe socket listening on it, whatever the beacon does. */
+    /** Quick Share's Apple link is up: keep the NameDrop server listening on it, whatever the beacon does. */
     fun keepProbe(on: Boolean) {
         peerLinkUp = on
         if (on) {
             probeStopJob?.cancel()
-            runCatching { com.keshav.daptap.nfc.SnapKeys.get(context).first.uuidString }.getOrNull()?.let { lanProbe.start(it) }
+            startNameDropServer()
         } else if (!beaconActive) {
-            probeStopJob = scope.launch { delay(30_000); if (!beaconActive && !peerLinkUp) lanProbe.stop() }
+            probeStopJob = scope.launch { delay(30_000); if (!beaconActive && !peerLinkUp) stopNameDropServer() }
         }
     }
     @Volatile private var peerLinkUp = false
@@ -553,7 +589,9 @@ class TapEngine(
         /** After an iPhone shows up, how long to wait for it to start NameDrop (it may need a few beacon cycles). */
         const val NAMEDROP_START_WAIT_MS = 5_000L
         const val NAMEDROP_FINISH_WAIT_MS = 10_000L
-        /** How long the Wi-Fi probe stays up after a handshake once DapTap leaves the screen. */
+        /** How long the NameDrop server stays up after a handshake once DapTap leaves the screen. */
+        const val NAMEDROP_PHOTO_PX = 400
+        const val NAMEDROP_PHOTO_MAX = 60_000
         const val PROBE_AFTER_NAMEDROP_MS = 90_000L
         const val ACTION_DEBOUNCE_MS = 8_000L
         const val TOUCH_TIMEOUT_MS = 4_000L

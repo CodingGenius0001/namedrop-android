@@ -73,6 +73,7 @@ private fun PersonStrip(p: Person, photo: androidx.compose.ui.graphics.ImageBitm
     val cell = STRIP_CELL
     val ago = DateUtils.getRelativeTimeSpanString(p.at, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
     val how = when (p.via) {
+        "namedrop" -> "NameDrop"
         "airdrop" -> "AirDrop"
         "web" -> "Web card"
         "share" -> "Shared"

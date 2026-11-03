@@ -98,6 +98,15 @@ dependencies {
     implementation(libs.okhttp)
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation(libs.kotlinx.serialization.json)
+    // NameDrop's contact exchange: QUIC v1 + TLS 1.3 (kwik), QPACK for HTTP/3 headers, binary plists.
+    // kwik 0.10.3 with one class patched (see app/src/main/java/tech/kwik/.../ServerConnectionCandidate.java, LGPL-3.0):
+    // the jar minus that class, plus kwik's own dependencies.
+    implementation(files("libs/kwik-0.10.3-daptap.jar"))
+    implementation("tech.kwik:agent15:3.1")
+    implementation("at.favre.lib:hkdf:2.0.0")
+    implementation("com.io7m.repackage.io.whitfin:io.whitfin.siphash:2.0.1")
+    implementation("tech.kwik:qpack:2.0")
+    implementation("com.googlecode.plist:dd-plist:1.28")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
