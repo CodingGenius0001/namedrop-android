@@ -11,6 +11,7 @@ import com.keshav.daptap.tap.TapEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -40,6 +41,10 @@ class DapTapApp : Application() {
                 " · NameDrop beacon supported: ${com.keshav.daptap.nfc.NameDropBeacon.isSupported(android.nfc.NfcAdapter.getDefaultAdapter(this))}" +
                 " · settings ${prefs.settings.value}"
         }.also { it.start(scope) }
+        com.keshav.daptap.diag.InterfaceWatch(engine::log).start(scope, prefs.settings.map { it.testingMode })
+        scope.launch {
+            prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { com.keshav.daptap.diag.TestingService.set(this@DapTapApp, it) }
+        }
         // The NameDrop identity is minted once; do it off the main thread so the NFC service never waits on it.
         scope.launch(Dispatchers.Default) { com.keshav.daptap.nfc.SnapKeys.warm(this@DapTapApp) }
         scope.launch {

@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Testing mode only: keeps the tap log uploading while another app is on screen. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.WRITE_CONTACTS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -95,6 +98,15 @@
                 <data android:mimeType="text/directory" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".diag.TestingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Developer testing mode: uploads the encrypted NFC debug log while other apps are open" />
+        </service>
 
         <service
             android:name=".nfc.TapService"
