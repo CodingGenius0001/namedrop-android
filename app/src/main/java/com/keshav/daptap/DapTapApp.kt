@@ -45,11 +45,11 @@ class DapTapApp : Application() {
         }.also { it.start(scope) }
         appleLink = com.keshav.daptap.applink.AppleLink(this, engine::log) { engine.restartNameDropServer() }
         engine.relaySocketProvider = {
-            if (appleLink.supported && appleLink.helper.ping(700) != null) appleLink.helper.relaySocket() else null
+            if (appleLink.supported && appleLink.enabled && appleLink.helper.ping(700) != null) appleLink.helper.relaySocket() else null
         }
         val bindHelper = { iface: String, network: android.net.Network ->
             scope.launch(Dispatchers.IO) {
-                if (appleLink.supported) appleLink.helper.bind(network.networkHandle)?.let { engine.log("iPhone link: $iface $it") }
+                if (appleLink.supported && appleLink.enabled) appleLink.helper.bind(network.networkHandle)?.let { engine.log("iPhone link: $iface $it") }
             }
         }
         val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
@@ -61,7 +61,7 @@ class DapTapApp : Application() {
         }
         // Bring the iPhone link helper back after a restart or update, if DapTap may switch Wireless debugging on.
         scope.launch {
-            if (appleLink.supported && !appleLink.refresh() && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start()
+            if (appleLink.supported && !appleLink.refresh() && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start()
         }
         val peerLink = com.keshav.daptap.diag.PeerLink(engine::log) {
             runCatching { com.keshav.daptap.nfc.SnapKeys.get(this).first.uuidString }.getOrNull()

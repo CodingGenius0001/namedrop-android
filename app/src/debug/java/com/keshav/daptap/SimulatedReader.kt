@@ -49,6 +49,12 @@ class SimulatedReader : BroadcastReceiver() {
                 Log.i("DapTapSim", "helperbind after: ping=" + app.appleLink.helper.ping())
             }.start()
         }
+        if (intent.hasExtra("applinkenabled")) {
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            val on = intent.getBooleanExtra("applinkenabled", true)
+            app.scope.launch { app.appleLink.setEnabled(on); Log.i("DapTapSim", "applink enabled=$on state=${app.appleLink.state.value}") }
+            return
+        }
         if (intent.getBooleanExtra("applinkstart", false)) {
             val app = context.applicationContext as com.keshav.daptap.DapTapApp
             context.getSharedPreferences("daptap_applink", Context.MODE_PRIVATE).edit().putBoolean("paired", true).commit()

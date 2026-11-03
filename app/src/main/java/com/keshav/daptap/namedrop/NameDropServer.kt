@@ -192,6 +192,7 @@ class NameDropServer(
      */
     private class LinkSocket(private val log: (String) -> Unit) : DatagramSocket(null as java.net.SocketAddress?) {
         @Volatile private var warned = false
+        @Volatile private var broadcasts = 0
         override fun send(p: DatagramPacket) {
             try {
                 super.send(p)
@@ -201,6 +202,8 @@ class NameDropServer(
                 val all = Inet6Address.getByAddress(null, ByteArray(16).also { it[0] = 0xFF.toByte(); it[1] = 0x02; it[15] = 1 }, dst.scopeId)
                 if (!warned) { warned = true; log("NameDrop server: direct replies blocked; sending them to all nodes on the link instead") }
                 super.send(DatagramPacket(p.data, p.offset, p.length, InetSocketAddress(all, p.port)))
+                val n = ++broadcasts
+                if (n == 1 || n % 20 == 0) log("NameDrop server: sent $n replies by link broadcast (to port ${p.port})")
             }
         }
     }

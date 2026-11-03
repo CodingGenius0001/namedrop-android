@@ -21,7 +21,7 @@ import java.security.SecureRandom
  * helper itself whenever Wireless debugging is reachable, switching it on and off again when it may.
  */
 class AppleLink(private val context: Context, private val log: (String) -> Unit, private val onHelperUp: () -> Unit) {
-    enum class Phase { UNSUPPORTED, NOT_PAIRED, STOPPED, STARTING, RUNNING }
+    enum class Phase { UNSUPPORTED, NOT_PAIRED, OFF, STOPPED, STARTING, RUNNING }
     data class State(val phase: Phase, val message: String? = null)
 
     private val prefs = context.getSharedPreferences("daptap_applink", Context.MODE_PRIVATE)
@@ -35,6 +35,8 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
 
     val supported get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
     val paired get() = prefs.getBoolean("paired", false)
+    /** The user can switch the helper off; NameDrop replies then fall back to link broadcast (experimental). */
+    val enabled get() = prefs.getBoolean("enabled", true)
     /** Granted by DapTap's own shell once paired; lets it switch Wireless debugging on to restart the helper. */
     val canToggleWirelessDebugging get() =
         context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
@@ -46,6 +48,7 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
         val ok = s != null && s.protocol == LinkHelper.PROTOCOL
         if (_state.value.phase != Phase.STARTING) {
             _state.value = when {
+                !enabled && paired -> State(Phase.OFF)
                 ok -> State(Phase.RUNNING)
                 !paired -> State(Phase.NOT_PAIRED)
                 else -> State(Phase.STOPPED, _state.value.message)
@@ -65,6 +68,7 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     suspend fun start(): Result<String> = lock.withLock {
         withContext(Dispatchers.IO) {
             if (!supported) return@withContext Result.failure(IllegalStateException("Needs Android 11 or newer"))
+            if (!enabled) { _state.value = State(Phase.OFF); return@withContext Result.failure(IllegalStateException("turned off")) }
             helper.ping()?.let { s ->
                 if (s.protocol == LinkHelper.PROTOCOL) { _state.value = State(Phase.RUNNING); return@withContext Result.success("already running") }
                 helper.stop() // an older helper from a previous DapTap version
@@ -126,6 +130,16 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     }
 
     fun setMessage(phase: Phase, message: String?) { _state.value = State(phase, message) }
+
+    /** Switch the helper on (start it) or off (stop it; the NameDrop server then answers without it). */
+    suspend fun setEnabled(on: Boolean) {
+        prefs.edit().putBoolean("enabled", on).apply()
+        if (on) { log("iPhone link: turned on"); start(); return }
+        withContext(Dispatchers.IO) { helper.stop() }
+        log("iPhone link: turned off; replies to iPhones go out by link broadcast instead")
+        _state.value = State(Phase.OFF)
+        onHelperUp() // restart the NameDrop server without the relay
+    }
 
     /** Testing mode: logs the moment the helper appears or disappears, with what adbd and Wi-Fi were doing. */
     suspend fun watch() = withContext(Dispatchers.IO) {

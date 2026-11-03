@@ -269,7 +269,10 @@ fun DapTapRoot(app: DapTapApp) {
         com.keshav.daptap.applink.AppleLink.Phase.STOPPED ->
             (link.message ?: "Not running. Turn on Wireless debugging (on Wi-Fi), then tap Start.") to ("Start" to { scope.launch { app.appleLink.start() }; Unit })
         com.keshav.daptap.applink.AppleLink.Phase.STARTING -> (link.message ?: "Starting…") to null
-        com.keshav.daptap.applink.AppleLink.Phase.RUNNING -> "On. iPhones can finish NameDrop with this phone." to null
+        com.keshav.daptap.applink.AppleLink.Phase.OFF ->
+            "Off. Replies to iPhones are broadcast instead (experimental)." to ("Turn on" to { scope.launch { app.appleLink.setEnabled(true) }; Unit })
+        com.keshav.daptap.applink.AppleLink.Phase.RUNNING ->
+            "On. iPhones can finish NameDrop with this phone." to ("Turn off" to { scope.launch { app.appleLink.setEnabled(false) }; Unit })
     }
 
     DapTapTheme(Grounds.of(card.label)) {
