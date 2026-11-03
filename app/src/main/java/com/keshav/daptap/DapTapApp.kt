@@ -122,8 +122,28 @@ class DapTapApp : Application() {
     }
 
     private fun reportLastCrash() {
+        reportLastFreeze()
         val text = runCatching { crashFile.takeIf { it.exists() }?.readText() }.getOrNull() ?: return
         crashFile.delete()
         text.lines().take(40).forEach { engine.log("CRASH $it") }
+    }
+
+    /** If Android last killed DapTap for not responding (ANR), log where the main thread was stuck. */
+    private fun reportLastFreeze() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val am = getSystemService(android.app.ActivityManager::class.java)
+                val exit = am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull() ?: return@runCatching
+                if (exit.reason != android.app.ApplicationExitInfo.REASON_ANR) return@runCatching
+                val seen = getSharedPreferences("daptap_diag", MODE_PRIVATE)
+                if (seen.getLong("anr_at", 0) == exit.timestamp) return@runCatching
+                seen.edit().putLong("anr_at", exit.timestamp).apply()
+                engine.log("FREEZE: Android stopped DapTap for not responding (${exit.description})")
+                val trace = exit.traceInputStream?.bufferedReader()?.readText().orEmpty()
+                val main = trace.substringAfter("\"main\"", "").lineSequence().takeWhile { it.isNotBlank() }.take(30)
+                main.forEach { engine.log("FREEZE   ${it.trim()}") }
+            }
+        }
     }
 }

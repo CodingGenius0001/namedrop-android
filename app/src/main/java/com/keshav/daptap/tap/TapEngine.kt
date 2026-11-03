@@ -134,7 +134,10 @@ class TapEngine(
         scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { nameDropServer.start() }.onFailure { log("NameDrop server: ${it.message}") } }
     }
 
-    private fun stopNameDropServer() { runCatching { nameDropServer.stop() } }
+    private fun stopNameDropServer() {
+        // Off the main thread: stopping waits for open connections to close.
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { nameDropServer.stop() } }
+    }
 
     /** The Apple link has an Android network: send the exchange server's replies through it. */
     fun useAppleLinkNetwork(iface: String, network: android.net.Network) {

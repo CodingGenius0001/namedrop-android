@@ -49,6 +49,9 @@ class NameDropServer(
     fun start(): Boolean {
         if (connector != null) return true
         return runCatching {
+            // kwik waits up to 30 s for connections to close on shutdown; a half-open one (an iPhone that walked
+            // away) would hold that long. One second is plenty here.
+            tech.kwik.core.server.impl.ServerConnectorImpl.DEFAULT_CLOSE_TIMEOUT_IN_SECONDS = 1
             // iPhones key the TLS handshake with X25519; Android's provider can't take it the way kwik asks.
             log("NameDrop server: X25519 ${XdhProvider.installIfNeeded()}")
             val certDer = SelfCert.build(spki, privateKey, hostname)
@@ -87,7 +90,6 @@ class NameDropServer(
     /** True while the server's packets go through the link helper. */
     @Volatile var relayed = false; private set
 
-    @Synchronized
     fun restart() { if (connector != null) { stop(); start() } }
 
     /** Route replies through [b] (applied now if running, and on every start). */
@@ -99,12 +101,12 @@ class NameDropServer(
             .onFailure { log("NameDrop server: couldn't use the Apple link (${it.javaClass.simpleName}: ${it.message})") } }
     }
 
-    @Synchronized
+    /** Stops the server. Closing waits (briefly) for connections to wind down, so call it off the main thread. */
     fun stop() {
-        runCatching { connector?.close() }
-        runCatching { socket?.close() }
-        connector = null
-        socket = null
+        val c: ServerConnector?; val sock: DatagramSocket?
+        synchronized(this) { c = connector; sock = socket; connector = null; socket = null; relayed = false }
+        runCatching { c?.close() }
+        runCatching { sock?.close() }
     }
 
     private inner class Factory : ApplicationProtocolConnectionFactory {
