@@ -52,10 +52,11 @@ test('reply message drops empties and strips @', () => {
 test('sendBack posts ciphertext to the session topic; fetchPhoto finds the photo', async () => {
   const key = await importKey(KEY);
   let posted;
-  await sendBack('abcdefghijklmnop', key, { name: 'Jo', phone: '1', email: '', company: '', title: '', instagram: '' },
+  // A name long enough that random base64 ciphertext can't contain it by chance (a 2-letter name made this flaky).
+  await sendBack('abcdefghijklmnop', key, { name: 'Josephine Quartermaine', phone: '1', email: '', company: '', title: '', instagram: '' },
     async (url, init) => { posted = { url, init }; return { ok: true }; });
   assert.equal(posted.url, 'https://ntfy.sh/daptap-abcdefghijklmnop');
-  assert.ok(!posted.init.body.includes('Jo'));
+  assert.ok(!posted.init.body.includes('Josephine'));
   const photo = new Uint8Array([255, 216, 255, 1, 2, 3]);
   const msg = await seal(key, new TextEncoder().encode(JSON.stringify({ t: 'photo', photo: b64urlEncode(photo), from: 'x' })));
   const other = await seal(await importKey(b64urlEncode(new Uint8Array(32).fill(9))), new TextEncoder().encode('{}'));
