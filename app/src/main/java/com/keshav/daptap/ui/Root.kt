@@ -313,6 +313,7 @@ fun DapTapRoot(app: DapTapApp) {
                             sharingBack = sharingBack,
                             sharedBack = inc.sharedBack,
                             onClose = { app.engine.dismissIncoming() },
+                            onRename = { app.engine.rename(inc.person, it) },
                         ),
                     )
                     screen == "edit" -> EditCardScreen(
@@ -347,6 +348,7 @@ fun DapTapRoot(app: DapTapApp) {
                                 onShareBack = null,
                                 onDelete = { app.history.remove(viewing.id); viewingId = null },
                                 onClose = { viewingId = null },
+                                onRename = { app.history.rename(viewing.id, it) },
                             ),
                         )
                     }

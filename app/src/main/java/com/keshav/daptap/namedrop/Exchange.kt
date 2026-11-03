@@ -71,6 +71,7 @@ class Exchange(
             }))
             p.endsWith("ask") -> Response(200, plist(NSDictionary().apply {
                 senderDevice = (req?.get("SenderComputerName") as? NSString)?.content
+                log("NameDrop exchange: the iPhone calls itself \"${senderDevice ?: ""}\" (${(req?.get("SenderModelName") as? NSString)?.content ?: "?"})")
                 put("ReceiverComputerName", ours().fullName)
                 put("ReceiverModelName", "DapTap")
             }))

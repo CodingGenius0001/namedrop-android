@@ -62,8 +62,10 @@ fun Poster(
     wave: Float = -1f,
     /** Your own card with no photo yet: show a tile that adds one (it travels in every AirDrop and tap). */
     onAddPhoto: (() -> Unit)? = null,
+    /** Shown in cells when the card has no name: "YOU" on your own card, a greeting on someone else's. */
+    placeholder: String = "YOU",
 ) {
-    val first = card.firstName.ifBlank { card.name.ifBlank { "YOU" } }
+    val first = card.firstName.ifBlank { card.name.ifBlank { placeholder } }
     BoxWithConstraints(modifier.fillMaxSize().background(ground.color)) {
         val pitch = posterPitch(first, maxWidth)
         val lineWidth = maxWidth - pitch * 2

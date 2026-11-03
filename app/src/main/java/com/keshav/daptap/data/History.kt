@@ -56,6 +56,12 @@ class History(private val context: Context) {
         persist(_people.value.map { if (it.id == id) it.copy(saved = true) else it })
     }
 
+    fun rename(id: String, name: String): Person? = synchronized(lock) {
+        var out: Person? = null
+        persist(_people.value.map { if (it.id == id) it.copy(card = it.card.copy(name = name.trim())).also { p -> out = p } else it })
+        out
+    }
+
     fun remove(id: String) = synchronized(lock) {
         _people.value.firstOrNull { it.id == id }?.photo?.let { File(Photos.peopleDir(context), it).delete() }
         persist(_people.value.filter { it.id != id })

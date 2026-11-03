@@ -27,8 +27,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PersonAddAlt
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -59,6 +72,8 @@ data class PersonActions(
     val sharedBack: Boolean = false,
     val onDelete: (() -> Unit)? = null,
     val onClose: () -> Unit,
+    /** Names a card that came without one. */
+    val onRename: ((String) -> Unit)? = null,
 )
 
 /**
@@ -85,7 +100,11 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     Box(Modifier.fillMaxSize()) {
-        Poster(card, photo, ground, topInset = top, bottomInset = bottom + 140.dp, nameProgress = build.value, wave = wave.value)
+        val nameless = card.name.isBlank()
+        var naming by remember(card) { mutableStateOf(false) }
+        Poster(card, photo, ground, topInset = top, bottomInset = bottom + if (nameless) 200.dp else 140.dp,
+            nameProgress = build.value, wave = wave.value, placeholder = "HELLO")
+        if (naming) NameDialog(onDone = { n -> naming = false; if (n.isNotBlank()) actions.onRename?.invoke(n) }, onDismiss = { naming = false })
 
         Row(
             Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).height(64.dp).padding(horizontal = 4.dp),
@@ -103,6 +122,18 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
                 .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = bottom + 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (nameless && actions.onRename != null) {
+                // An iPhone can share just a number and photo; let them put a name to it before saving.
+                OutlinedButton(
+                    onClick = { naming = true },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    border = BorderStroke(1.dp, ground.inkSoft),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ground.ink),
+                ) {
+                    Icon(Icons.Outlined.Edit, null); Spacer(Modifier.width(8.dp))
+                    Text("Add their name", fontSize = 16.sp)
+                }
+            }
             Button(
                 onClick = actions.onSave,
                 enabled = !actions.saved && !actions.saving,
@@ -144,4 +175,30 @@ fun PersonScreen(card: ContactCard, photo: ImageBitmap?, title: String, animate:
             }
         }
     }
+}
+
+@Composable
+private fun NameDialog(onDone: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Their name") },
+        text = {
+            Column {
+                Text("Their iPhone shared a number and photo but no name.", fontSize = 14.sp)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = text, onValueChange = { text = it }, singleLine = true,
+                    placeholder = { Text("Name") },
+                    modifier = Modifier.focusRequester(focus),
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { onDone(text) }),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onDone(text) }, enabled = text.isNotBlank()) { Text("Done") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

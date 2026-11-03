@@ -75,7 +75,7 @@ class SimulatedReader : BroadcastReceiver() {
             }.start()
         }
         if (intent.getBooleanExtra("loopback", false)) {
-            Thread { Thread.sleep(1500); com.keshav.daptap.namedrop.LoopbackIphone.run { Log.i("DapTapSim", "loopback: $it") } }.start()
+            Thread { Thread.sleep(1500); val nameless = intent.getBooleanExtra("nameless", false); com.keshav.daptap.namedrop.LoopbackIphone.run({ Log.i("DapTapSim", "loopback: $it") }, nameless) }.start()
         }
         if (intent.getBooleanExtra("kwikdebug", false)) System.setProperty("daptap.kwikdebug", "1")
         if (intent.getBooleanExtra("namedrop", false)) { simulateNameDrop(context, engine); return }

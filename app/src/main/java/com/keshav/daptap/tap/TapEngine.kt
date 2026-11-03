@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import com.keshav.daptap.BuildConfig
 import com.keshav.daptap.core.AppleEcp
+import com.keshav.daptap.namedrop.PosterName
 import com.keshav.daptap.core.Base64Url
 import com.keshav.daptap.core.ContactCard
 import com.keshav.daptap.core.Ndef
@@ -167,8 +168,13 @@ class TapEngine(
                 .filter { it.isNotEmpty() && !it[0].isWhitespace() && it.contains(':') }
                 .map { it.substringBefore(':').substringBefore(';') + "(" + it.substringAfter(':').length + ")" }
                 .joinToString(" ").take(600))
-            // An iPhone may send its card without a name; fall back to the name it gave the exchange.
-            val card = if (parsed.card.name.isBlank() && !fullName.isNullOrBlank()) parsed.card.copy(name = fullName) else parsed.card
+            // An iPhone may send its card without a name (iOS can keep it only on the Contact Poster): look
+            // there, then fall back to the name it gave the exchange.
+            val poster = if (parsed.card.name.isBlank()) runCatching { PosterName.inspect(String(vcard, Charsets.UTF_8)) }
+                .onFailure { log("NameDrop: couldn't read the poster (${it.javaClass.simpleName})") }.getOrNull() else null
+            poster?.let { log("NameDrop: poster ${it.description}") }
+            val fallback = poster?.name ?: fullName
+            val card = if (parsed.card.name.isBlank() && !fallback.isNullOrBlank()) parsed.card.copy(name = fallback) else parsed.card
             log("NameDrop: got ${card.name.ifBlank { "a card without a name" }} from the iPhone")
             receiveVCard(card, parsed.photo, "namedrop")
         }
@@ -538,6 +544,12 @@ class TapEngine(
     }
 
     fun dismissIncoming() { _incoming.value = null }
+
+    /** Names a card that arrived without one (an iPhone can send just a number and photo). */
+    fun rename(person: Person, name: String) {
+        val updated = history.rename(person.id, name) ?: return
+        _incoming.update { if (it?.person?.id == person.id) it.copy(person = updated) else it }
+    }
 
     fun markSaved(person: Person) {
         history.markSaved(person.id)
