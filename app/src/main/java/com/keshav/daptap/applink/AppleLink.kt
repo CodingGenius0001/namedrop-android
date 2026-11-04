@@ -44,6 +44,22 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     val canToggleWirelessDebugging get() =
         context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * Experiment: Android lets the apps listed in this setting use restricted networks, which would let DapTap
+     * send on the Apple link itself, with no helper or debugging. This only adds DapTap to the list and says what
+     * happened; [com.keshav.daptap.namedrop.LinkRoute.probe] then logs whether a send on the link works.
+     */
+    fun listForRestrictedNetworks(): String = runCatching {
+        if (!canToggleWirelessDebugging) return "no permission to change system settings yet"
+        val resolver = context.contentResolver
+        val uid = android.os.Process.myUid().toString()
+        val listed = Settings.Global.getString(resolver, RESTRICTED_NETWORK_UIDS).orEmpty().split(';').filter { it.isNotBlank() }
+        if (uid in listed) return "already listed (uid $uid)"
+        Settings.Global.putString(resolver, RESTRICTED_NETWORK_UIDS, (listed + uid).joinToString(";"))
+        val now = Settings.Global.getString(resolver, RESTRICTED_NETWORK_UIDS).orEmpty()
+        if (uid in now.split(';')) "listed uid $uid" else "wrote uid $uid but the setting reads \"$now\""
+    }.getOrElse { "${it.javaClass.simpleName}: ${it.message}" }
+
     /** Whether the helper is up (and the state reflects it). */
     suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {
         if (!supported) return@withContext false
@@ -276,6 +292,8 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
 
     companion object {
         const val ADB_WIFI = "adb_wifi_enabled"
+        /** android.net.ConnectivitySettingsManager.UIDS_ALLOWED_ON_RESTRICTED_NETWORKS: ";"-separated uids. */
+        const val RESTRICTED_NETWORK_UIDS = "uids_allowed_on_restricted_networks"
         /** Waits between failed restarts: 15 s, 30 s, 1 min, 2 min, then every 5 min (a poke retries at once). */
         private val BACKOFF_MS = longArrayOf(15_000, 30_000, 60_000, 120_000, 300_000)
         const val HELPER_NAME = "daptap-link"

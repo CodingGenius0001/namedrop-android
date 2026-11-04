@@ -31,6 +31,8 @@ class DapTapApp : Application() {
     @Volatile private var currentPeerIface: String? = null
     /** The iPhone has finished its handshake on the current link (repeat binds stop; see bindHelper). */
     @Volatile private var iphoneConnected = false
+    /** DapTap left the Wi-Fi network for the current swap and should rejoin when it ends. */
+    @Volatile private var leftWifi = false
     /** Binds the helper to a link (set once the bind logic exists; the helper-up callback is built before it). */
     @Volatile private var onHelperBind: ((String, android.net.Network, String) -> Unit)? = null
 
@@ -73,6 +75,7 @@ class DapTapApp : Application() {
         // shows whether our packets still leave the phone and whether the kernel still knows where the iPhone is.
         val linkSamples = java.util.Collections.synchronizedList(mutableListOf<String>())
         var linkSampler: kotlinx.coroutines.Job? = null
+        var wifiWatch: kotlinx.coroutines.Job? = null
         engine.swapDiagnostics = {
             if (appleLink.supported) listOfNotNull(appleLink.helper.stats()?.let { "iPhone link helper: $it" },
                 appleLink.helper.traffic()?.let { "iPhone link traffic (per second, in/out): $it" },
@@ -82,7 +85,13 @@ class DapTapApp : Application() {
         engine.onSwapActive = { on ->
             com.keshav.daptap.tap.SwapService.set(this, on)
             linkSampler?.cancel()
+            wifiWatch?.cancel()
+            if (!on && leftWifi) {
+                leftWifi = false
+                scope.launch(Dispatchers.IO) { engine.log("Wi-Fi: rejoining after the swap -> ${appleLink.helper.wifi(true) ?: "helper didn't answer"}") }
+            }
             if (on) {
+                wifiWatch = scope.launch(Dispatchers.IO) { keepOffWifiDuringSwap() }
                 appleLink.helper.resetTraffic()
                 iphoneConnected = false
                 linkSamples.clear()
@@ -206,6 +215,12 @@ class DapTapApp : Application() {
         scope.launch {
             prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { com.keshav.daptap.diag.TestingService.set(this@DapTapApp, it) }
         }
+        // Testing mode: try for direct access to the Apple link. The probe above logs whether it worked.
+        scope.launch(Dispatchers.IO) {
+            prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { testing ->
+                if (testing && appleLink.supported) engine.log("direct link test: ${appleLink.listForRestrictedNetworks()}")
+            }
+        }
         scope.launch(Dispatchers.IO) {
             val others = com.keshav.daptap.nfc.NfcRouting.otherNdefClaimants(this@DapTapApp)
             if (others.isNotEmpty()) engine.log("NFC: other apps also claim the tag AID: ${others.joinToString()}")
@@ -228,7 +243,29 @@ class DapTapApp : Application() {
         })
     }
 
-    /** Whether Android registered the peer link as a Network (then sockets and NSD can be pinned to it). */
+    /**
+     * Samsung usually drops Wi-Fi as the Apple link comes up. On the one logged tap where it stayed connected, none
+     * of our replies reached the iPhone, so during a swap DapTap does the same if Samsung hasn't. It gives Samsung a
+     * moment first, and keeps checking in case Android rejoins. Runs until the swap ends and cancels it.
+     */
+    private suspend fun keepOffWifiDuringSwap() {
+        while (currentPeerNetwork == null) kotlinx.coroutines.delay(100)
+        kotlinx.coroutines.delay(WIFI_GRACE_MS)
+        if (!wifiConnected()) engine.log("Wi-Fi: not connected with the iPhone link up, nothing to do")
+        while (true) {
+            if (wifiConnected()) {
+                val r = appleLink.helper.wifi(false)
+                engine.log("Wi-Fi: still connected with the iPhone link up; leaving the network for this swap -> ${r ?: "helper didn't answer"}")
+                if (r == "ok") leftWifi = true
+                kotlinx.coroutines.delay(1_500)
+            } else kotlinx.coroutines.delay(300)
+        }
+    }
+
+    private fun wifiConnected(): Boolean = runCatching {
+        val wifi = java.net.NetworkInterface.getByName("wlan0") ?: return false
+        wifi.isUp && wifi.inetAddresses.toList().any { it is java.net.Inet4Address }
+    }.getOrDefault(false)
 
     private val crashFile get() = java.io.File(filesDir, "last-crash.txt")
 
@@ -290,5 +327,8 @@ class DapTapApp : Application() {
 
         /** Gaps between the repeat binds after an Apple link appears: at +150, +400, +900, +1900 and +3400 ms. */
         private val REBIND_GAPS_MS = longArrayOf(150, 250, 500, 1_000, 1_500)
+
+        /** How long after the Apple link appears Samsung gets to drop Wi-Fi by itself. */
+        private const val WIFI_GRACE_MS = 800L
     }
 }

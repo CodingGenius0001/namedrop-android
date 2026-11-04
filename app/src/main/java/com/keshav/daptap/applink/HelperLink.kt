@@ -41,6 +41,10 @@ class HelperLink(private val token: ByteArray) {
         return request(LinkHelper.LINK, "$iface|$peer".toByteArray(), 600)?.let { text(it) }
     }
 
+    /** Leave ([connect] false) or rejoin the current Wi-Fi network: "ok", what went wrong, or null if no answer. */
+    fun wifi(connect: Boolean): String? =
+        request(LinkHelper.WIFI, byteArrayOf(if (connect) 1 else 0), 1_500)?.let { text(it) }
+
     /** Called with what the helper reports unasked (sends that failed), on the relay's receive thread. */
     @Volatile var onNotice: ((String) -> Unit)? = null
 

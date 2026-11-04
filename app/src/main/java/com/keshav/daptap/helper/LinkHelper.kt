@@ -19,7 +19,7 @@ import kotlin.system.exitProcess
  * Messages (UDP on [::1]:[CONTROL_PORT]): "DT" + token(16) + type(1) + body. See [HelperLink] for the app side.
  */
 object LinkHelper {
-    const val PROTOCOL = 4
+    const val PROTOCOL = 5
     /** Oldest helper whose SEND/RECV/BIND/ATTACH wire format matches: it can still carry a swap. */
     const val MIN_COMPATIBLE = 2
     const val CONTROL_PORT = 60193
@@ -33,6 +33,8 @@ object LinkHelper {
     const val STATS = 9
     /** The Apple link as the kernel sees it: interface counters and the iPhone's neighbour entry (protocol 4). */
     const val LINK = 10
+    /** Leave the current Wi-Fi network (0) or rejoin it (1), without turning Wi-Fi off (protocol 5). */
+    const val WIFI = 11
     const val REPLY = 0x80
 
     @Volatile private var app: SocketAddress? = null
@@ -101,10 +103,31 @@ object LinkHelper {
                     val to = p.socketAddress
                     Thread { reply(control, token, to, LINK, linkState(iface, peer).take(1800).toByteArray()) }.start()
                 }
+                WIFI -> {
+                    val connect = b.get().toInt() == 1
+                    val to = p.socketAddress
+                    Thread { reply(control, token, to, WIFI, wifi(connect).toByteArray()) }.start()
+                }
                 STOP -> { reply(control, token, p.socketAddress, STOP, ByteArray(0)); exitProcess(0) }
             }
         }
     }
+
+    /**
+     * Leaves or rejoins the current Wi-Fi network. Never turns Wi-Fi off: Android ties Wi-Fi Aware links to Wi-Fi
+     * being on, and a disconnect undoes itself if DapTap dies, because Android rejoins by itself.
+     * Returns "ok", or what went wrong.
+     */
+    private fun wifi(connect: Boolean): String = runCatching {
+        val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java)
+            .invoke(null, "wifi") ?: error("no wifi service")
+        val type = Class.forName("android.net.wifi.IWifiManager")
+        val service = Class.forName("android.net.wifi.IWifiManager\$Stub")
+            .getMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
+        val name = if (connect) "reconnect" else "disconnect"
+        val ok = type.getMethod(name, String::class.java).invoke(service, "com.android.shell")
+        if (ok == true) "ok" else "$name returned $ok"
+    }.getOrElse { val e = it.cause ?: it; "${e.javaClass.simpleName}: ${e.message}" }
 
     /**
      * Sends one datagram to the iPhone. A send can fail for a moment (the link's buffers full, the link being

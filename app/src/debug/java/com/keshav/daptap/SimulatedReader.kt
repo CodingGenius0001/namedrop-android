@@ -54,6 +54,16 @@ class SimulatedReader : BroadcastReceiver() {
             Thread { Log.i("DapTapSim", "linkstate $iface: ${app.appleLink.helper.link(iface)}") }.start()
             return
         }
+        intent.getStringExtra("wifi")?.let { state ->
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            Thread { Log.i("DapTapSim", "wifi $state: ${app.appleLink.helper.wifi(state == "on")}") }.start()
+            return
+        }
+        if (intent.getBooleanExtra("directlink", false)) {
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            Thread { Log.i("DapTapSim", "directlink: ${app.appleLink.listForRestrictedNetworks()}") }.start()
+            return
+        }
         if (intent.hasExtra("applinkenabled")) {
             val app = context.applicationContext as com.keshav.daptap.DapTapApp
             val on = intent.getBooleanExtra("applinkenabled", true)
