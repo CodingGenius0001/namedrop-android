@@ -29,6 +29,8 @@ class DapTapApp : Application() {
     @Volatile var startedActivities = 0; private set
     @Volatile private var currentPeerNetwork: android.net.Network? = null
     @Volatile private var currentPeerIface: String? = null
+    /** The iPhone has finished its handshake on the current link (repeat binds stop; see bindHelper). */
+    @Volatile private var iphoneConnected = false
     /** Binds the helper to a link (set once the bind logic exists; the helper-up callback is built before it). */
     @Volatile private var onHelperBind: ((String, android.net.Network, String) -> Unit)? = null
 
@@ -67,11 +69,39 @@ class DapTapApp : Application() {
         engine.startAppleLink = {
             scope.launch { if (appleLink.supported && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start() }
         }
+        // Per second during a swap: the Apple link's kernel counters and the iPhone's neighbour entry, so a stall
+        // shows whether our packets still leave the phone and whether the kernel still knows where the iPhone is.
+        val linkSamples = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var linkSampler: kotlinx.coroutines.Job? = null
         engine.swapDiagnostics = {
             if (appleLink.supported) listOfNotNull(appleLink.helper.stats()?.let { "iPhone link helper: $it" },
-                appleLink.helper.traffic()?.let { "iPhone link traffic (per second, in/out): $it" }).joinToString("\n").ifEmpty { null } else null
+                appleLink.helper.traffic()?.let { "iPhone link traffic (per second, in/out): $it" },
+                synchronized(linkSamples) { linkSamples.toList() }.takeIf { it.isNotEmpty() }?.let { "iPhone link kernel (per second): ${it.joinToString(" · ")}" },
+            ).joinToString("\n").ifEmpty { null } else null
         }
-        engine.onSwapActive = { on -> com.keshav.daptap.tap.SwapService.set(this, on); if (on) appleLink.helper.resetTraffic() }
+        engine.onSwapActive = { on ->
+            com.keshav.daptap.tap.SwapService.set(this, on)
+            linkSampler?.cancel()
+            if (on) {
+                appleLink.helper.resetTraffic()
+                iphoneConnected = false
+                linkSamples.clear()
+                linkSampler = scope.launch(Dispatchers.IO) {
+                    val t0 = android.os.SystemClock.elapsedRealtime()
+                    var prev: String? = null
+                    while (linkSamples.size < 90) {
+                        val iface = currentPeerIface
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (iface != null && appleLink.supported) appleLink.helper.link(iface)?.let { r ->
+                            linkSamples += "+${(now - t0) / 1000}s ${linkDelta(prev, r)}"
+                            prev = r
+                        }
+                        kotlinx.coroutines.delay((1_000 - (android.os.SystemClock.elapsedRealtime() - now)).coerceAtLeast(100))
+                    }
+                }
+            }
+        }
+        engine.onIphoneConnected = { iphoneConnected = true }
         /**
          * Ties the helper's NameDrop socket to the Apple link. A bind made the moment the link's network appears can
          * be too early: the bind succeeds, sends "succeed", and nothing reaches the iPhone. Every working swap had a
@@ -81,7 +111,12 @@ class DapTapApp : Application() {
          */
         val bindHelper = { iface: String, network: android.net.Network, why: String ->
             scope.launch(Dispatchers.IO) {
-                if (appleLink.supported && appleLink.enabled) {
+                // Once the iPhone has connected, the path works: leave the socket alone. Every failed tap on
+                // 1.0.34-1.0.38 had a repeat bind land mid-exchange (the +3400 ms one) and stalled around it;
+                // the one that worked was done before it. A new helper or a new link still binds.
+                if (iphoneConnected && why != "link up" && why != "new helper") {
+                    engine.log("iPhone link: left $iface bound ($why): the iPhone is connected")
+                } else if (appleLink.supported && appleLink.enabled) {
                     appleLink.helper.bind(network.networkHandle)?.let { r -> engine.log("iPhone link: $iface $r ($why)") }
                 }
             }
@@ -120,6 +155,7 @@ class DapTapApp : Application() {
         }
         val linkRoute = com.keshav.daptap.namedrop.LinkRoute(this, engine::log).apply {
             onPeerNetwork = { iface, network ->
+                iphoneConnected = false
                 currentPeerNetwork = network
                 currentPeerIface = iface
                 onPeerLinkUp(iface)
@@ -234,6 +270,24 @@ class DapTapApp : Application() {
     }
 
     companion object {
+        private val COUNTERS = Regex("tx (\\d+) txdrop (\\d+) txerr (\\d+) rx (\\d+) rxdrop (\\d+) ns (\\d+) na (\\d+) discards (\\d+)")
+
+        /**
+         * One kernel sample, against the one before: counter deltas, and the iPhone's neighbour entry in full the
+         * first time and whenever it changes ("same" otherwise).
+         */
+        fun linkDelta(prev: String?, now: String): String {
+            val a = prev?.let { COUNTERS.find(it)?.groupValues?.drop(1)?.map(String::toLong) }
+            val b = COUNTERS.find(now)?.groupValues?.drop(1)?.map(String::toLong) ?: return now
+            val peer = now.substringAfter(" | ", "")
+            if (a == null) return "${now.substringBefore(" | ")} | $peer"
+            val d = b.zip(a) { x, y -> x - y }
+            val samePeer = prev?.substringAfter(" | ", "") == peer
+            return "tx+${d[0]} rx+${d[3]}" + (if (d[1] + d[2] + d[4] + d[7] != 0L) " txdrop+${d[1]} txerr+${d[2]} rxdrop+${d[4]} discards+${d[7]}" else "") +
+                (if (d[5] + d[6] != 0L) " ns+${d[5]} na+${d[6]}" else "") +
+                if (samePeer) "" else " | $peer"
+        }
+
         /** Gaps between the repeat binds after an Apple link appears: at +150, +400, +900, +1900 and +3400 ms. */
         private val REBIND_GAPS_MS = longArrayOf(150, 250, 500, 1_000, 1_500)
     }

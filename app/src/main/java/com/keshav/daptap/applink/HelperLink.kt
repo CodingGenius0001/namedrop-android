@@ -35,6 +35,12 @@ class HelperLink(private val token: ByteArray) {
     /** The helper's counters (relayed, retried, failed sends, kernel drops), or null if it doesn't answer. */
     fun stats(): String? = request(LinkHelper.STATS, ByteArray(0), 500)?.let { text(it) }
 
+    /** The Apple link [iface] as the kernel sees it, with the last iPhone's neighbour entry (helper protocol 4+). */
+    fun link(iface: String): String? {
+        val peer = lastPeer?.address?.hostAddress.orEmpty()
+        return request(LinkHelper.LINK, "$iface|$peer".toByteArray(), 600)?.let { text(it) }
+    }
+
     /** Called with what the helper reports unasked (sends that failed), on the relay's receive thread. */
     @Volatile var onNotice: ((String) -> Unit)? = null
 

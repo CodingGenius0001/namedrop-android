@@ -19,7 +19,7 @@ import kotlin.system.exitProcess
  * Messages (UDP on [::1]:[CONTROL_PORT]): "DT" + token(16) + type(1) + body. See [HelperLink] for the app side.
  */
 object LinkHelper {
-    const val PROTOCOL = 3
+    const val PROTOCOL = 4
     /** Oldest helper whose SEND/RECV/BIND/ATTACH wire format matches: it can still carry a swap. */
     const val MIN_COMPATIBLE = 2
     const val CONTROL_PORT = 60193
@@ -31,6 +31,8 @@ object LinkHelper {
     const val NOTICE = 8
     /** Counters: datagrams relayed, sends failed, kernel drops on the NameDrop port. */
     const val STATS = 9
+    /** The Apple link as the kernel sees it: interface counters and the iPhone's neighbour entry (protocol 4). */
+    const val LINK = 10
     const val REPLY = 0x80
 
     @Volatile private var app: SocketAddress? = null
@@ -93,6 +95,12 @@ object LinkHelper {
                     }.getOrElse { "${it.javaClass.simpleName}: ${it.message}" }
                     reply(control, token, p.socketAddress, PROBE, r.toByteArray())
                 }
+                LINK -> {
+                    // "iface|peer address". Reading /sys and running ip takes a few ms: off the relay thread.
+                    val (iface, peer) = String(ByteArray(b.remaining()).also { b.get(it) }).split('|', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+                    val to = p.socketAddress
+                    Thread { reply(control, token, to, LINK, linkState(iface, peer).take(1800).toByteArray()) }.start()
+                }
                 STOP -> { reply(control, token, p.socketAddress, STOP, ByteArray(0)); exitProcess(0) }
             }
         }
@@ -134,6 +142,36 @@ object LinkHelper {
     }
 
     /** The kernel's drop counter for UDP sockets on the NameDrop port (the shell user may read it). */
+    /**
+     * "tx 120 txdrop 0 txerr 0 rx 98 rxdrop 0 ns 3 na 3 discards 0 | peer fe80::1 lladdr … REACHABLE | 14 neighbours": whether our
+     * packets leave the phone, and whether the kernel still knows how to reach the iPhone on the link.
+     */
+    private fun linkState(iface: String, peer: String): String {
+        if (!iface.matches(Regex("[A-Za-z0-9_.-]{1,15}"))) return "bad interface"
+        // /sys/class/net is closed to the shell user; /proc/net/dev and dev_snmp6 are not.
+        val dev = runCatching {
+            java.io.File("/proc/net/dev").readLines().firstOrNull { it.trim().startsWith("$iface:") }
+                ?.substringAfter(':')?.trim()?.split(Regex("\\s+"))
+        }.getOrNull()
+        fun d(i: Int) = dev?.getOrNull(i) ?: "?"
+        val snmp = runCatching {
+            java.io.File("/proc/net/dev_snmp6/$iface").readLines().associate { l -> l.trim().split(Regex("\\s+")).let { it[0] to it.getOrElse(1) { "?" } } }
+        }.getOrDefault(emptyMap())
+        fun n(k: String) = snmp[k] ?: "?"
+        val neigh = runCatching {
+            val proc = ProcessBuilder("ip", "-6", "neigh", "show", "dev", iface).redirectErrorStream(true).start()
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            out.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        }.getOrElse { listOf("ip failed: ${it.message}") }
+        val bare = peer.substringBefore('%').lowercase()
+        val mine = neigh.filter { bare.isNotEmpty() && it.lowercase().startsWith("$bare ") }
+        // /proc/net/dev: rx bytes packets errs drop fifo frame compressed multicast, then the same for tx.
+        return "tx ${d(9)} txdrop ${d(11)} txerr ${d(10)} rx ${d(1)} rxdrop ${d(3)}" +
+            " ns ${n("Icmp6OutNeighborSolicits")} na ${n("Icmp6InNeighborAdvertisements")} discards ${n("Ip6OutDiscards")}" +
+            " | peer ${mine.joinToString("; ").ifEmpty { if (bare.isEmpty()) "unknown" else "no entry" }} | ${neigh.size} neighbours"
+    }
+
     private fun drops(): String = runCatching {
         val port = "%04X".format(DATA_PORT)
         (java.io.File("/proc/net/udp6").readLines() + java.io.File("/proc/net/udp").readLines())

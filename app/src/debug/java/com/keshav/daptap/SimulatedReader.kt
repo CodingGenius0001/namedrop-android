@@ -49,6 +49,11 @@ class SimulatedReader : BroadcastReceiver() {
                 Log.i("DapTapSim", "helperbind after: ping=" + app.appleLink.helper.ping())
             }.start()
         }
+        intent.getStringExtra("linkstate")?.let { iface ->
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            Thread { Log.i("DapTapSim", "linkstate $iface: ${app.appleLink.helper.link(iface)}") }.start()
+            return
+        }
         if (intent.hasExtra("applinkenabled")) {
             val app = context.applicationContext as com.keshav.daptap.DapTapApp
             val on = intent.getBooleanExtra("applinkenabled", true)

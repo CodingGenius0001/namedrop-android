@@ -136,6 +136,8 @@ class TapEngine(
     @Volatile var swapDiagnostics: (() -> String?)? = null
     /** An iPhone swap started (true) or ended (false): keep DapTap running at full speed meanwhile. */
     @Volatile var onSwapActive: ((Boolean) -> Unit)? = null
+    /** The iPhone finished its QUIC handshake with us: the path through the Apple link works. */
+    @Volatile var onIphoneConnected: (() -> Unit)? = null
     private var appleLinkWatchdog: Job? = null
     @Volatile private var appleLinkStartedAt = 0L
     @Volatile private var appleLinkUpAt = 0L
@@ -385,6 +387,7 @@ class TapEngine(
     private fun onIphoneConnected() {
         iphoneConnectedAt = SystemClock.elapsedRealtime()
         mark("connected")
+        runCatching { onIphoneConnected?.invoke() }
     }
 
     /** Each swap's number: a connection from an earlier swap can't end this one. */
