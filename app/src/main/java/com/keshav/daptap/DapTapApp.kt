@@ -67,7 +67,11 @@ class DapTapApp : Application() {
         engine.startAppleLink = {
             scope.launch { if (appleLink.supported && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start() }
         }
-        engine.swapDiagnostics = { if (appleLink.supported) appleLink.helper.stats()?.let { "iPhone link helper: $it" } else null }
+        engine.swapDiagnostics = {
+            if (appleLink.supported) listOfNotNull(appleLink.helper.stats()?.let { "iPhone link helper: $it" },
+                appleLink.helper.traffic()?.let { "iPhone link traffic (per second, in/out): $it" }).joinToString("\n").ifEmpty { null } else null
+        }
+        engine.onSwapActive = { on -> com.keshav.daptap.tap.SwapService.set(this, on); if (on) appleLink.helper.resetTraffic() }
         /**
          * Ties the helper's NameDrop socket to the Apple link. A bind made the moment the link's network appears can
          * be too early: the bind succeeds, sends "succeed", and nothing reaches the iPhone. Every working swap had a

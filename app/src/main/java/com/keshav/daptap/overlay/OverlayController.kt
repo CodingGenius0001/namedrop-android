@@ -165,18 +165,15 @@ class OverlayController(private val app: DapTapApp) {
         val c = content.value as? OverlayContent.Cover ?: return
         val ground = c.ground
         val reduce = remember { reducedMotion(app) }
-        val wave = remember { Animatable(0f) }
-        LaunchedEffect(c) {
-            if (reduce) return@LaunchedEffect
-            while (true) { wave.snapTo(0f); wave.animateTo(1f, tween(1600, easing = LinearEasing)); delay(400) }
-        }
         val person0 = c.person
         Box(Modifier.fillMaxSize().walletGround().clickable(enabled = false) {}) {
             com.keshav.daptap.ui.GlassPass(
                 if (person0 != null) com.keshav.daptap.ui.Grounds.of(person0.card.label) else ground,
                 Modifier.align(androidx.compose.ui.Alignment.Center).fillMaxWidth().padding(horizontal = 16.dp),
                 stubHeight = com.keshav.daptap.ui.STUB_HEIGHT,
-                shine = if (reduce || person0 != null) -1f else wave.value,
+                // Kept cheap while the swap runs (no live blur, no looping light): DapTap is behind Quick Share
+                // then, and every frame it draws competes with the exchange for CPU.
+                live = false,
             ) {
             Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp)) {
                 val person = c.person

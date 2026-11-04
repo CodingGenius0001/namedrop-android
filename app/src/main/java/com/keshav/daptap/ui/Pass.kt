@@ -113,6 +113,8 @@ fun GlassPass(
     stack: Int = 0,
     shine: Float = -1f,
     corner: Dp = 26.dp,
+    /** False where drawing must stay cheap (the swap cover): no live blur behind the glass. */
+    live: Boolean = true,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val shape = PassShape(corner, stubHeight)
@@ -135,7 +137,7 @@ fun GlassPass(
         // The person's colour, glowing through the glass as a soft light, not a shape.
         Box(
             Modifier.matchParentSize().padding(horizontal = 36.dp, vertical = 48.dp)
-                .let { if (Build.VERSION.SDK_INT >= 31) it.blur(56.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else it }
+                .let { if (live && Build.VERSION.SDK_INT >= 31) it.blur(56.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else it }
                 .background(
                     Brush.radialGradient(listOf(ground.color.copy(alpha = 0.9f), ground.color.copy(alpha = 0.45f), Color.Transparent)),
                     androidx.compose.foundation.shape.RoundedCornerShape(48.dp),

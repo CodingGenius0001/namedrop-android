@@ -134,6 +134,8 @@ class TapEngine(
     @Volatile var startAppleLink: () -> Unit = {}
     /** Set by the app: the link helper's counters, logged after each swap in testing mode (blocking; IO only). */
     @Volatile var swapDiagnostics: (() -> String?)? = null
+    /** An iPhone swap started (true) or ended (false): keep DapTap running at full speed meanwhile. */
+    @Volatile var onSwapActive: ((Boolean) -> Unit)? = null
     private var appleLinkWatchdog: Job? = null
     @Volatile private var appleLinkStartedAt = 0L
     @Volatile private var appleLinkUpAt = 0L
@@ -400,6 +402,7 @@ class TapEngine(
             appleLinkWatchdog = null
             val wasActive = appleLinkStartedAt != 0L
             appleLinkStartedAt = 0L
+            runCatching { onSwapActive?.invoke(false) }
             appleLinkFinishedAt = SystemClock.elapsedRealtime()
             if (!wasActive) return@launch
             mark("done")
@@ -440,6 +443,7 @@ class TapEngine(
             return
         }
         swapId++
+        runCatching { onSwapActive?.invoke(true) }
         appleLinkStartedAt = SystemClock.elapsedRealtime()
         appleLinkUpAt = 0L
         iphoneConnectedAt = 0L

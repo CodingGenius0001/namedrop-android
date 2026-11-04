@@ -122,6 +122,15 @@
         </service>
 
         <service
+            android:name=".tap.SwapService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a few-second NFC contact swap with a nearby iPhone running while Quick Share is on screen" />
+        </service>
+
+        <service
             android:name=".applink.PairingService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
