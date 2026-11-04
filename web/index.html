@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1F3BD1">
 <title>DapTap</title>
-<meta name="description" content="NameDrop for Android. Tap phones, swap contact cards, even with iPhones.">
+<meta name="description" content="NameDrop for Android. Tap an iPhone and it plays its own NameDrop: your contact cards swap, no app on their side.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,17 +28,17 @@
 <header class="bar"><span class="brand">DapTap</span><a class="from" href="https://github.com/CodingGenius0001/namedrop-android">Source</a></header>
 <main class="poster landing">
   <svg class="name" id="hero" role="img" aria-label="DapTap"></svg>
-  <p class="lede">NameDrop for Android. Bring two phones together and your contact cards swap, even with an iPhone that has no app.</p>
+  <p class="lede">NameDrop for Android. Hold your phone to an iPhone and it plays its own NameDrop: your cards swap, and they need no app.</p>
   <ol class="steps">
     <li><span class="n">1</span><div><b>Make your card</b>Name, number, photo, and a colour that's yours.</div></li>
-    <li><span class="n">2</span><div><b>Touch phones, back to back</b>Your Galaxy acts as an NFC card. Another DapTap phone swaps instantly.</div></li>
-    <li><span class="n">3</span><div><b>iPhones get a real AirDrop</b>DapTap hands your card to Quick Share, so the iPhone shows its own contact request. No app on their side.</div></li>
+    <li><span class="n">2</span><div><b>Set up the iPhone link once</b>DapTap walks you through it in a few taps, and keeps it running after that.</div></li>
+    <li><span class="n">3</span><div><b>Touch phones, back to back</b>The iPhone shows its NameDrop card. When they tap Share, their card lands in DapTap and yours on their iPhone, ready to save. Another DapTap phone swaps instantly.</div></li>
   </ol>
   <div class="cta">
     <a class="btn primary" href="DapTap.apk" download>Download the APK</a>
     <a class="btn secondary" href="https://github.com/CodingGenius0001/namedrop-android#readme">How it works</a>
   </div>
-  <p class="fine">AirDrop to iPhone needs a phone whose Quick Share supports it (Galaxy S26, Pixel 9 and 10) and the iPhone's AirDrop set to Everyone for 10 minutes. Otherwise DapTap can show your card in Safari instead.</p>
+  <p class="fine">Made for the Galaxy S26 on One UI 9 (Android 17), which can raise the Wi-Fi link iPhones use for NameDrop. Samsung's Auto Blocker has to be off, because the iPhone link runs through Wireless debugging.</p>
 </main>
 <script type="module">
   import { layout, ROWS } from './c/cellfont.js';
