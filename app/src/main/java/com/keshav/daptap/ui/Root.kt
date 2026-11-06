@@ -247,7 +247,7 @@ fun DapTapRoot(app: DapTapApp) {
         is Updater.State.Failed -> u.message to ("Try again" to { u.release?.let(::startUpdate) ?: checkForUpdate() })
     }
 
-    // The iPhone link (Wireless debugging helper) that lets NameDrop finish on this phone.
+    // The iPhone link that lets NameDrop finish on this phone.
     val link by app.appleLink.state.collectAsState()
     LaunchedEffect(resumeTick) { app.appleLink.refresh() }
     fun setUpIphoneLink() {
@@ -264,7 +264,7 @@ fun DapTapRoot(app: DapTapApp) {
             else (link.message ?: "Not running. Turn on Wireless debugging (on Wi-Fi), then tap Start.") to ("Start" to { scope.launch { app.appleLink.start() }; Unit })
         com.keshav.daptap.applink.AppleLink.Phase.STARTING -> (link.message ?: "Starting…") to null
         com.keshav.daptap.applink.AppleLink.Phase.OFF ->
-            "Off. Replies to iPhones are broadcast instead (experimental)." to ("Turn on" to { scope.launch { app.appleLink.setEnabled(true) }; Unit })
+            "Off. NameDrop can't finish with iPhones on this phone." to ("Turn on" to { scope.launch { app.appleLink.setEnabled(true) }; Unit })
         com.keshav.daptap.applink.AppleLink.Phase.RUNNING ->
             "On. iPhones can finish NameDrop with this phone." to ("Turn off" to { scope.launch { app.appleLink.setEnabled(false) }; Unit })
     }

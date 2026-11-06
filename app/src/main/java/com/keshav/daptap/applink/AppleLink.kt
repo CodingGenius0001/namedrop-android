@@ -16,9 +16,10 @@ import kotlinx.coroutines.withContext
 import java.security.SecureRandom
 
 /**
- * The iPhone link: DapTap's helper, started through the phone's own Wireless debugging, which lets NameDrop
- * replies leave on the Apple link (see [LinkHelper]). Pairing happens once; after that DapTap starts the
- * helper itself whenever Wireless debugging is reachable, switching it on and off again when it may.
+ * The iPhone link: what lets NameDrop replies leave on the Apple link. Setup pairs with the phone's own Wireless
+ * debugging once, which gets DapTap the permission to put itself on Android's list of apps allowed on restricted
+ * networks. From then on DapTap sends on the link itself ([isDirect], [DirectLink]) and debugging can stay off. On a
+ * phone that refuses this, the helper ([LinkHelper]) does the sending, restarted whenever Wireless debugging is reachable.
  */
 class AppleLink(private val context: Context, private val log: (String) -> Unit, private val onHelperUp: () -> Unit) {
     enum class Phase { UNSUPPORTED, NOT_PAIRED, OFF, STOPPED, STARTING, RUNNING }
@@ -28,7 +29,9 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     private val prefs = context.getSharedPreferences("daptap_applink", Context.MODE_PRIVATE)
     private val token: ByteArray = prefs.getString("token", null)?.let(LinkHelper::hex)
         ?: ByteArray(16).also { SecureRandom().nextBytes(it); prefs.edit().putString("token", hex(it)).apply() }
-    val helper = HelperLink(token)
+    val traffic = LinkTraffic()
+    val helper = HelperLink(token, traffic)
+    val direct = DirectLink(traffic, log, ::onDirectDenied)
     /** The running helper is from an older DapTap: it works, but [start] should replace it when it can. */
     @Volatile var outdated = false; private set
     private val lock = Mutex()
@@ -44,11 +47,32 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     val canToggleWirelessDebugging get() =
         context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 
-    /**
-     * Experiment: Android lets the apps listed in this setting use restricted networks, which would let DapTap
-     * send on the Apple link itself, with no helper or debugging. This only adds DapTap to the list and says what
-     * happened; [com.keshav.daptap.namedrop.LinkRoute.probe] then logs whether a send on the link works.
-     */
+    /** DapTap can send on the Apple link itself, so it needs neither the helper nor debugging. Android 12+. */
+    val isDirect: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !directDenied && listedForRestrictedNetworks()
+
+    private val directDeniedKey get() = "${Build.FINGERPRINT}/${com.keshav.daptap.BuildConfig.VERSION_CODE}"
+    /** Android refused the bind on this build of the phone and of DapTap; an update to either tries again. */
+    private val directDenied get() = prefs.getString("direct_denied_on", null) == directDeniedKey
+
+    private fun onDirectDenied(error: String) {
+        if (directDenied) return
+        prefs.edit().putString("direct_denied_on", directDeniedKey).apply()
+        log("iPhone link: Android won't let DapTap onto the link directly ($error); going back to the helper")
+        _state.value = State(Phase.STOPPED)
+        poke()
+    }
+
+    private fun listedForRestrictedNetworks() = runCatching {
+        android.os.Process.myUid().toString() in Settings.Global.getString(context.contentResolver, RESTRICTED_NETWORK_UIDS).orEmpty().split(';')
+    }.getOrDefault(false)
+
+    /** DapTap's own socket for the NameDrop server. A helper left running holds that port, so it stops first. */
+    fun directSocket(): java.net.DatagramSocket {
+        if (helper.ping(150) != null) { helper.stop(); log("iPhone link: stopped the helper, which isn't needed any more") }
+        return direct.socket()
+    }
+
+    /** Android lets the apps listed in this setting use restricted networks, such as the Apple link. */
     fun listForRestrictedNetworks(): String = runCatching {
         if (!canToggleWirelessDebugging) return "no permission to change system settings yet"
         val resolver = context.contentResolver
@@ -63,6 +87,11 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     /** Whether the helper is up (and the state reflects it). */
     suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {
         if (!supported) return@withContext false
+        if (enabled && isDirect) {
+            outdated = false
+            if (_state.value.phase != Phase.STARTING) _state.value = State(Phase.RUNNING)
+            return@withContext true
+        }
         val s = helper.ping()
         // A helper from an older DapTap still relays (same wire format since protocol 2); start() upgrades it.
         val ok = s != null && s.protocol in LinkHelper.MIN_COMPATIBLE..LinkHelper.PROTOCOL
@@ -91,6 +120,7 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
         withContext(Dispatchers.IO) {
             if (!supported) return@withContext Result.failure(IllegalStateException("Needs Android 11 or newer"))
             if (!enabled) { _state.value = State(Phase.OFF); return@withContext Result.failure(IllegalStateException("turned off")) }
+            if (isDirect) { _state.value = State(Phase.RUNNING); return@withContext Result.success("direct") }
             // An older helper keeps running (and relaying) until its replacement is launched: the launch command
             // replaces it, so a failed launch never leaves the phone without one.
             val before = helper.ping()
@@ -224,7 +254,8 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
     /**
      * Keeps the iPhone link up, testing mode or not: notices the helper is gone, logs why, and starts it again
      * (switching debugging back on as needed) with a backoff, never during a swap ([busy]). Also replaces a helper
-     * from an older DapTap. [notify] gets what the user must do when DapTap can't fix it itself, or null.
+     * from an older DapTap. [notify] gets what the user must do when DapTap can't fix it itself, or null. Once DapTap
+     * can send on the link itself, all of that stops: it leaves debugging alone and nothing needs restarting.
      */
     suspend fun supervise(busy: () -> Boolean, notify: (String?) -> Unit) = withContext(Dispatchers.IO) {
         if (!supported) return@withContext
@@ -233,7 +264,24 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
         var nextTry = 0L
         var notified: String? = null
         fun tell(text: String?) { if (text != notified) { notified = text; runCatching { notify(text) } } }
+        var usingDirect = false
         while (true) {
+            if (canToggleWirelessDebugging && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !listedForRestrictedNetworks())
+                log("iPhone link: restricted network list: ${listForRestrictedNetworks()}")
+            if (enabled && isDirect) {
+                if (!usingDirect && !busy()) {
+                    usingDirect = true
+                    log("iPhone link: sending directly; the helper and debugging aren't needed · ${adbState()}")
+                    if (_state.value.phase != Phase.STARTING) _state.value = State(Phase.RUNNING)
+                    outdated = false
+                    // Setup just got DapTap listed: move the server off the helper now.
+                    if (helper.ping(300) != null) { helper.stop(); onHelperUp() }
+                }
+                tell(null)
+                kotlinx.coroutines.withTimeoutOrNull(5_000L) { pokes.receive() }
+                continue
+            }
+            usingDirect = false
             val s = helper.ping(600)
             val up = s != null && s.protocol in LinkHelper.MIN_COMPATIBLE..LinkHelper.PROTOCOL
             if (up) outdated = s!!.protocol < LinkHelper.PROTOCOL
@@ -266,14 +314,14 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
         }
     }
 
-    /** Switch the helper on (start it) or off (stop it; the NameDrop server then answers without it). */
+    /** Switch the iPhone link on or off. Off, iPhones can't finish NameDrop with this phone. */
     suspend fun setEnabled(on: Boolean) {
         prefs.edit().putBoolean("enabled", on).apply()
         if (on) { log("iPhone link: turned on"); start(); return }
         withContext(Dispatchers.IO) { helper.stop() }
-        log("iPhone link: turned off; replies to iPhones go out by link broadcast instead")
+        log("iPhone link: turned off")
         _state.value = State(Phase.OFF)
-        onHelperUp() // restart the NameDrop server without the relay
+        onHelperUp() // restart the NameDrop server without the link
     }
 
     fun adbState(): String {

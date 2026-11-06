@@ -15,7 +15,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.Inet6Address
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.security.KeyStore
@@ -36,8 +35,8 @@ class NameDropServer(
     private val hostname: String,
     private val exchange: Exchange,
     private val log: (String) -> Unit,
-    /** A socket through DapTap's link helper, when it's running (see applink.HelperLink); else we bind our own. */
-    private val relaySocket: () -> DatagramSocket? = { null },
+    /** A socket that can use the Apple link (see the applink package) and how it does; else we bind our own. */
+    private val linkSocket: () -> Pair<DatagramSocket, String>? = { null },
     /** An iPhone finished the QUIC/TLS handshake with us. */
     /** Returns the swap this connection belongs to, handed back in [onFinished]. */
     private val onConnected: () -> Int = { 0 },
@@ -50,8 +49,6 @@ class NameDropServer(
 ) {
     private var connector: ServerConnector? = null
     private var socket: DatagramSocket? = null
-    /** Ties the socket to the Apple link's network so replies can leave on it (see LinkRoute). */
-    private var binder: ((DatagramSocket) -> Unit)? = null
     private val workers = Executors.newCachedThreadPool { r -> Thread(r, "daptap-namedrop-h3").apply { isDaemon = true } }
 
     @Synchronized
@@ -68,11 +65,9 @@ class NameDropServer(
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(certDer)) as X509Certificate
             val pw = "daptap".toCharArray()
             val ks = KeyStore.getInstance("PKCS12").apply { load(null, null); setKeyEntry("namedrop", privateKey, pw, arrayOf(cert)) }
-            val relay = runCatching { relaySocket() }.getOrNull()
-            val s = relay ?: LinkSocket(log).apply { reuseAddress = true; bind(InetSocketAddress(PORT)) }
+            val link = runCatching { linkSocket() }.onFailure { log("NameDrop server: no socket for the iPhone link (${it.message})") }.getOrNull()
+            val s = link?.first ?: PlainSocket(log).apply { reuseAddress = true; bind(InetSocketAddress(PORT)) }
             runCatching { s.receiveBufferSize = 4 shl 20 }
-            relayed = relay != null
-            if (relay == null) binder?.let { b -> runCatching { b(s) }.onFailure { log("NameDrop server: couldn't use the Apple link (${it.message})") } }
             val config = ServerConnectionConfig.builder()
                 .maxIdleTimeoutInSeconds(30)
                 .maxOpenPeerInitiatedBidirectionalStreams(16)
@@ -94,30 +89,18 @@ class NameDropServer(
             c.start()
             socket = s
             connector = c
-            log("NameDrop server listening on UDP $PORT${if (relayed) " (through the iPhone link helper)" else ""}")
+            log("NameDrop server listening on UDP $PORT (${link?.second ?: "no iPhone link"})")
             warmUp(certDer)
             true
         }.getOrElse { log("NameDrop server failed to start: ${it.javaClass.simpleName}: ${it.message}"); stop(); false }
     }
 
-    /** True while the server's packets go through the link helper. */
-    @Volatile var relayed = false; private set
-
     fun restart() { if (connector != null) { stop(); start() } }
-
-    /** Route replies through [b] (applied now if running, and on every start). */
-    @Synchronized
-    fun routeVia(b: (DatagramSocket) -> Unit) {
-        binder = b
-        if (relayed) return
-        socket?.let { s -> runCatching { b(s); log("NameDrop server: replies now go over the Apple link") }
-            .onFailure { log("NameDrop server: couldn't use the Apple link (${it.javaClass.simpleName}: ${it.message})") } }
-    }
 
     /** Stops the server. Closing waits (briefly) for connections to wind down, so call it off the main thread. */
     fun stop() {
         val c: ServerConnector?; val sock: DatagramSocket?
-        synchronized(this) { c = connector; sock = socket; connector = null; socket = null; relayed = false }
+        synchronized(this) { c = connector; sock = socket; connector = null; socket = null }
         runCatching { c?.close() }
         runCatching { sock?.close() }
     }
@@ -299,36 +282,16 @@ class NameDropServer(
         }.getOrDefault("no stats")
     }
 
-    /**
-     * Our own socket on the NameDrop port. Android won't let an app send unicast on the restricted Apple link
-     * (ENETUNREACH); multicast does get out there, so as a last resort a blocked reply to a link-local peer goes
-     * to all nodes on that link (ff02::1) at the same port, in case the iPhone takes it.
-     */
-    private class LinkSocket(private val log: (String) -> Unit) : DatagramSocket(null as java.net.SocketAddress?) {
-        @Volatile private var warned = false
-        @Volatile private var broadcasts = 0
+    /** Our own socket on the NameDrop port when there's no iPhone link: sends that fail don't stop the server. */
+    private class PlainSocket(private val log: (String) -> Unit) : DatagramSocket(null as java.net.SocketAddress?) {
         @Volatile private var failures = 0
         override fun send(p: DatagramPacket) {
             try {
-                trySend(p)
+                super.send(p)
             } catch (e: java.io.IOException) {
                 // kwik treats a send exception as fatal for the whole server; a lost datagram is just a lost datagram.
                 val n = ++failures
                 if (n == 1 || n % 50 == 0) log("NameDrop server: couldn't send a reply ($n so far: ${e.message})")
-            }
-        }
-
-        private fun trySend(p: DatagramPacket) {
-            try {
-                super.send(p)
-            } catch (e: java.io.IOException) {
-                val dst = p.address as? Inet6Address
-                if (dst == null || !dst.isLinkLocalAddress || dst.scopeId == 0 || e.message?.contains("ENETUNREACH") != true) throw e
-                val all = Inet6Address.getByAddress(null, ByteArray(16).also { it[0] = 0xFF.toByte(); it[1] = 0x02; it[15] = 1 }, dst.scopeId)
-                if (!warned) { warned = true; log("NameDrop server: direct replies blocked; sending them to all nodes on the link instead") }
-                super.send(DatagramPacket(p.data, p.offset, p.length, InetSocketAddress(all, p.port)))
-                val n = ++broadcasts
-                if (n == 1 || n % 20 == 0) log("NameDrop server: sent $n replies by link broadcast (to port ${p.port})")
             }
         }
     }

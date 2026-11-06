@@ -156,21 +156,21 @@ class TapEngine(
         com.keshav.daptap.namedrop.NameDropServer(id.spki, key, id.uuidString.lowercase() + ".local",
             com.keshav.daptap.namedrop.Exchange(id.uuidString, ::nameDropCard, ::onNameDropCard, ::log),
             ::log,
-            relaySocket = { relaySocketProvider?.invoke() },
+            linkSocket = { linkSocketProvider?.invoke() },
             onConnected = { onIphoneConnected(); swapId },
             onRequest = { path -> mark(path.trim('/').lowercase()) },
             onFinished = { why, id -> if (id == swapId) finishAppleLink(why) else log("NameDrop: an earlier connection ended ($why); ignored") },
             verbose = { prefs.settings.value.testingMode },
         )
     }
-    /** Set by the app: a socket through the iPhone link helper when it's running. */
-    @Volatile var relaySocketProvider: (() -> java.net.DatagramSocket?)? = null
+    /** Set by the app: a socket that can use the Apple link right now and how it does, if there is one. */
+    @Volatile var linkSocketProvider: (() -> Pair<java.net.DatagramSocket, String>?)? = null
 
     /** Server starts and stops run one at a time, in order, so a stale stop can't undo a newer start. */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val serverDispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(1)
 
-    /** The link helper just came up: move the server onto it. */
+    /** How the server reaches the Apple link just changed: reopen its socket. */
     fun restartNameDropServer() {
         scope.launch(serverDispatcher) { runCatching { nameDropServer.restart() } }
     }
@@ -183,13 +183,6 @@ class TapEngine(
         // Off the main thread: stopping waits for open connections to close. Re-checked when it runs, so a stop
         // queued behind a newer start (DapTap paused and resumed) does nothing.
         scope.launch(serverDispatcher) { if (!beaconActive && !peerLinkUp) runCatching { nameDropServer.stop() } }
-    }
-
-    /** The Apple link has an Android network: send the exchange server's replies through it. */
-    fun useAppleLinkNetwork(iface: String, network: android.net.Network) {
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching { nameDropServer.routeVia { s -> network.bindSocket(s) } }
-        }
     }
 
     /** Our card as the iPhone gets it in /Ask and /Exchange, built once per card/photo change. */
@@ -438,7 +431,7 @@ class TapEngine(
 
     private fun bringUpAppleLink() {
         if (!appleLinkReady()) {
-            // Without the helper, replies can't reach the iPhone (broadcast replies were tested and fail): don't
+            // Without the iPhone link, replies can't reach the iPhone (broadcast replies were tested and fail): don't
             // open Quick Share for nothing. Say what's missing and try to start the helper for the next tap.
             log("NameDrop: the iPhone link isn't running, so the swap can't finish; starting it for the next tap")
             _events.tryEmit("Turn on the iPhone link in Settings to swap with iPhones")

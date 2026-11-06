@@ -9,7 +9,7 @@ import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 
 /** DapTap's side of the link helper's loopback protocol (see [LinkHelper]). */
-class HelperLink(private val token: ByteArray) {
+class HelperLink(private val token: ByteArray, private val traffic: LinkTraffic) {
     private val helper = InetSocketAddress(InetAddress.getByName("::1"), LinkHelper.CONTROL_PORT)
 
     data class Status(val protocol: Int, val uid: Int, val portHeld: Boolean, val lastError: String)
@@ -54,28 +54,6 @@ class HelperLink(private val token: ByteArray) {
      */
     @Volatile var onNewPeer: ((InetSocketAddress) -> Unit)? = null
     @Volatile private var lastPeer: InetSocketAddress? = null
-
-    // Per-second datagram counts through the relay for the current swap (testing-mode diagnostics): which way a
-    // stall went, in or out, shows at a glance.
-    private val trafficIn = java.util.concurrent.atomic.AtomicIntegerArray(TRAFFIC_SECONDS)
-    private val trafficOut = java.util.concurrent.atomic.AtomicIntegerArray(TRAFFIC_SECONDS)
-    @Volatile private var trafficStart = android.os.SystemClock.elapsedRealtime()
-
-    fun resetTraffic() {
-        for (i in 0 until TRAFFIC_SECONDS) { trafficIn.set(i, 0); trafficOut.set(i, 0) }
-        trafficStart = android.os.SystemClock.elapsedRealtime()
-    }
-
-    private fun count(arr: java.util.concurrent.atomic.AtomicIntegerArray) {
-        val s = ((android.os.SystemClock.elapsedRealtime() - trafficStart) / 1000).toInt()
-        if (s in 0 until TRAFFIC_SECONDS) arr.incrementAndGet(s)
-    }
-
-    /** "+0s 4/3 · +1s 12/9 …" up to the last second with traffic, or null if none. */
-    fun traffic(): String? {
-        val last = (TRAFFIC_SECONDS - 1 downTo 0).firstOrNull { trafficIn.get(it) + trafficOut.get(it) > 0 } ?: return null
-        return (0..last).joinToString(" · ") { "+${it}s ${trafficIn.get(it)}/${trafficOut.get(it)}" }
-    }
 
     private fun text(b: ByteBuffer) = String(ByteArray(b.remaining()).also { b.get(it) })
 
@@ -122,7 +100,7 @@ class HelperLink(private val token: ByteArray) {
             LinkHelper.writeAddress(out, dst)
             out.put(p.data, p.offset, p.length)
             super.send(DatagramPacket(out.array(), out.position(), helper))
-            count(trafficOut)
+            traffic.sent()
         }
 
         override fun receive(p: DatagramPacket) {
@@ -140,7 +118,7 @@ class HelperLink(private val token: ByteArray) {
                 }
                 val from = LinkHelper.readAddress(b)
                 if (from.address != lastPeer?.address) { lastPeer = from; runCatching { onNewPeer?.invoke(from) } }
-                count(trafficIn)
+                traffic.received()
                 val n = minOf(b.remaining(), p.data.size - p.offset)
                 b.get(p.data, p.offset, n)
                 p.length = n
@@ -148,9 +126,5 @@ class HelperLink(private val token: ByteArray) {
                 return
             }
         }
-    }
-
-    private companion object {
-        const val TRAFFIC_SECONDS = 90
     }
 }

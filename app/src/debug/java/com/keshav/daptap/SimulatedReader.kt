@@ -64,6 +64,20 @@ class SimulatedReader : BroadcastReceiver() {
             Thread { Log.i("DapTapSim", "directlink: ${app.appleLink.listForRestrictedNetworks()}") }.start()
             return
         }
+        // --es directsend eth0: the direct socket on that interface's network, sending to a stale interface index.
+        intent.getStringExtra("directsend")?.let { iface ->
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            Thread {
+                val network = com.keshav.daptap.namedrop.LinkRoute(context.applicationContext) {}.networkFor(iface)
+                val socket = app.appleLink.direct.socket()
+                Log.i("DapTapSim", "directsend bind: " + network?.let { app.appleLink.direct.bind(iface, it) })
+                val stale = java.net.Inet6Address.getByAddress(null, ByteArray(16).also { it[0] = 0xFE.toByte(); it[1] = 0x80.toByte(); it[15] = 1 }, 999)
+                socket.send(java.net.DatagramPacket(byteArrayOf(0), 1, stale, 9))
+                Log.i("DapTapSim", "directsend: ${app.appleLink.direct.stats()}")
+                socket.close()
+            }.start()
+            return
+        }
         if (intent.hasExtra("applinkenabled")) {
             val app = context.applicationContext as com.keshav.daptap.DapTapApp
             val on = intent.getBooleanExtra("applinkenabled", true)

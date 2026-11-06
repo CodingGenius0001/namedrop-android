@@ -59,14 +59,19 @@ class DapTapApp : Application() {
             engine.restartNameDropServer()
         }
         appleLink.helper.onNotice = { engine.log("iPhone link helper: $it") }
-        engine.relaySocketProvider = {
-            // The state says whether the helper is up without a round trip; a quick ping covers a stale state.
-            if (appleLink.supported && appleLink.enabled &&
-                (appleLink.state.value.phase == com.keshav.daptap.applink.AppleLink.Phase.RUNNING || appleLink.helper.ping(150) != null))
-                appleLink.helper.relaySocket() else null
+        engine.linkSocketProvider = {
+            when {
+                !appleLink.supported || !appleLink.enabled -> null
+                appleLink.isDirect -> appleLink.directSocket() to "directly on the Apple link"
+                // The state says whether the helper is up without a round trip; a quick ping covers a stale state.
+                appleLink.state.value.phase == com.keshav.daptap.applink.AppleLink.Phase.RUNNING || appleLink.helper.ping(150) != null ->
+                    appleLink.helper.relaySocket() to "through the iPhone link helper"
+                else -> null
+            }
         }
         engine.appleLinkReady = {
-            appleLink.supported && appleLink.enabled && appleLink.state.value.phase == com.keshav.daptap.applink.AppleLink.Phase.RUNNING
+            appleLink.supported && appleLink.enabled &&
+                (appleLink.isDirect || appleLink.state.value.phase == com.keshav.daptap.applink.AppleLink.Phase.RUNNING)
         }
         engine.startAppleLink = {
             scope.launch { if (appleLink.supported && appleLink.enabled && appleLink.paired && appleLink.canToggleWirelessDebugging) appleLink.start() }
@@ -77,8 +82,9 @@ class DapTapApp : Application() {
         var linkSampler: kotlinx.coroutines.Job? = null
         var wifiWatch: kotlinx.coroutines.Job? = null
         engine.swapDiagnostics = {
-            if (appleLink.supported) listOfNotNull(appleLink.helper.stats()?.let { "iPhone link helper: $it" },
-                appleLink.helper.traffic()?.let { "iPhone link traffic (per second, in/out): $it" },
+            if (appleLink.supported) listOfNotNull(
+                if (appleLink.isDirect) "iPhone link direct: ${appleLink.direct.stats()}" else appleLink.helper.stats()?.let { "iPhone link helper: $it" },
+                appleLink.traffic.summary()?.let { "iPhone link traffic (per second, in/out): $it" },
                 synchronized(linkSamples) { linkSamples.toList() }.takeIf { it.isNotEmpty() }?.let { "iPhone link kernel (per second): ${it.joinToString(" · ")}" },
             ).joinToString("\n").ifEmpty { null } else null
         }
@@ -92,7 +98,8 @@ class DapTapApp : Application() {
             }
             if (on) {
                 wifiWatch = scope.launch(Dispatchers.IO) { keepOffWifiDuringSwap() }
-                appleLink.helper.resetTraffic()
+                appleLink.traffic.reset()
+                appleLink.direct.resetStats()
                 iphoneConnected = false
                 linkSamples.clear()
                 linkSampler = scope.launch(Dispatchers.IO) {
@@ -101,7 +108,8 @@ class DapTapApp : Application() {
                     while (linkSamples.size < 90) {
                         val iface = currentPeerIface
                         val now = android.os.SystemClock.elapsedRealtime()
-                        if (iface != null && appleLink.supported) appleLink.helper.link(iface)?.let { r ->
+                        // The kernel's counters come through the helper, so a direct swap goes without them.
+                        if (iface != null && appleLink.supported && !appleLink.isDirect) appleLink.helper.link(iface)?.let { r ->
                             linkSamples += "+${(now - t0) / 1000}s ${linkDelta(prev, r)}"
                             prev = r
                         }
@@ -112,13 +120,13 @@ class DapTapApp : Application() {
         }
         engine.onIphoneConnected = { iphoneConnected = true }
         /**
-         * Ties the helper's NameDrop socket to the Apple link. A bind made the moment the link's network appears can
+         * Ties the NameDrop socket (DapTap's own, or the helper's) to the Apple link. A bind made the moment the link's network appears can
          * be too early: the bind succeeds, sends "succeed", and nothing reaches the iPhone. Every working swap had a
          * second bind after mosey0 was fully up; 1.0.33 skipped repeats and the iPhone sat on "waiting". So this is
          * never deduplicated: [rebindSoon] repeats it over the first seconds of a link, and an iPhone's first packet
-         * triggers one more (see HelperLink.onNewPeer). A bind is cheap: the helper applies it between receives.
+         * triggers one more (see onNewPeer). A bind is cheap: it only sets which network the socket's packets use.
          */
-        val bindHelper = { iface: String, network: android.net.Network, why: String ->
+        val bindLink = { iface: String, network: android.net.Network, why: String ->
             scope.launch(Dispatchers.IO) {
                 // Once the iPhone has connected, the path works: leave the socket alone. Every failed tap on
                 // 1.0.34-1.0.38 had a repeat bind land mid-exchange (the +3400 ms one) and stalled around it;
@@ -126,17 +134,21 @@ class DapTapApp : Application() {
                 if (iphoneConnected && why != "link up" && why != "new helper") {
                     engine.log("iPhone link: left $iface bound ($why): the iPhone is connected")
                 } else if (appleLink.supported && appleLink.enabled) {
-                    appleLink.helper.bind(network.networkHandle)?.let { r -> engine.log("iPhone link: $iface $r ($why)") }
+                    val result = if (appleLink.isDirect) appleLink.direct.bind(iface, network) else appleLink.helper.bind(network.networkHandle)
+                    result?.let { r -> engine.log("iPhone link: $iface $r ($why)") }
                 }
             }
         }
-        onHelperBind = { iface, network, why -> bindHelper(iface, network, why) }
+        onHelperBind = { iface, network, why -> bindLink(iface, network, why) }
         // The iPhone's first packet: the link is surely set up by now, so bind once more before we answer it.
-        appleLink.helper.onNewPeer = {
+        val onNewPeer = { peer: java.net.InetSocketAddress ->
             val network = currentPeerNetwork
             val iface = currentPeerIface
-            if (network != null && iface != null) bindHelper(iface, network, "iPhone ${it.address.hostAddress} sent to us")
+            if (network != null && iface != null) bindLink(iface, network, "iPhone ${peer.address.hostAddress} sent to us")
+            Unit
         }
+        appleLink.helper.onNewPeer = onNewPeer
+        appleLink.direct.onNewPeer = onNewPeer
         var rebindJob: kotlinx.coroutines.Job? = null
         val rebindSoon = { iface: String, network: android.net.Network ->
             rebindJob?.cancel()
@@ -145,7 +157,7 @@ class DapTapApp : Application() {
                 for (gap in REBIND_GAPS_MS) {
                     kotlinx.coroutines.delay(gap); at += gap
                     if (currentPeerNetwork != network) break
-                    bindHelper(iface, network, "+$at ms").join()
+                    bindLink(iface, network, "+$at ms").join()
                 }
             }
         }
@@ -168,12 +180,12 @@ class DapTapApp : Application() {
                 currentPeerNetwork = network
                 currentPeerIface = iface
                 onPeerLinkUp(iface)
-                bindHelper(iface, network, "link up")
+                bindLink(iface, network, "link up")
                 rebindSoon(iface, network)
-                engine.useAppleLinkNetwork(iface, network)
                 engine.onAppleLinkUp()
             }
             onPeerNetworkLost = { _, network ->
+                appleLink.direct.lost(network)
                 // A late loss of an older link must not shut down the one that's up now.
                 if (currentPeerNetwork == null || currentPeerNetwork == network) {
                     currentPeerNetwork = null
@@ -203,7 +215,7 @@ class DapTapApp : Application() {
                     val first = probed != ni.name
                     probed = ni.name
                     scope.launch(Dispatchers.IO) {
-                        linkRoute.networkFor(ni.name)?.let { bindHelper(ni.name, it, "interface up"); engine.useAppleLinkNetwork(ni.name, it) }
+                        linkRoute.networkFor(ni.name)?.let { bindLink(ni.name, it, "interface up") }
                         if (first) linkRoute.probe(ni) { handle, dst -> if (appleLink.supported) appleLink.helper.probe(handle, dst) else null }
                     }
                 }
@@ -214,12 +226,6 @@ class DapTapApp : Application() {
         ).start(scope, prefs.settings.map { it.testingMode })
         scope.launch {
             prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { com.keshav.daptap.diag.TestingService.set(this@DapTapApp, it) }
-        }
-        // Testing mode: try for direct access to the Apple link. The probe above logs whether it worked.
-        scope.launch(Dispatchers.IO) {
-            prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { testing ->
-                if (testing && appleLink.supported) engine.log("direct link test: ${appleLink.listForRestrictedNetworks()}")
-            }
         }
         scope.launch(Dispatchers.IO) {
             val others = com.keshav.daptap.nfc.NfcRouting.otherNdefClaimants(this@DapTapApp)
@@ -246,12 +252,17 @@ class DapTapApp : Application() {
     /**
      * Samsung usually drops Wi-Fi as the Apple link comes up. On the one logged tap where it stayed connected, none
      * of our replies reached the iPhone, so during a swap DapTap does the same if Samsung hasn't. It gives Samsung a
-     * moment first, and keeps checking in case Android rejoins. Runs until the swap ends and cancels it.
+     * moment first, and keeps checking in case Android rejoins. Leaving takes the helper, so a direct swap only
+     * logs that it stayed connected. Runs until the swap ends and cancels it.
      */
     private suspend fun keepOffWifiDuringSwap() {
         while (currentPeerNetwork == null) kotlinx.coroutines.delay(100)
         kotlinx.coroutines.delay(WIFI_GRACE_MS)
         if (!wifiConnected()) engine.log("Wi-Fi: not connected with the iPhone link up, nothing to do")
+        if (appleLink.isDirect) {
+            if (wifiConnected()) engine.log("Wi-Fi: still connected with the iPhone link up; no helper to leave the network")
+            return
+        }
         while (true) {
             if (wifiConnected()) {
                 val r = appleLink.helper.wifi(false)
