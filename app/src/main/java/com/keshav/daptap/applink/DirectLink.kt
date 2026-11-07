@@ -1,6 +1,7 @@
 package com.keshav.daptap.applink
 
 import android.net.Network
+import android.os.ParcelFileDescriptor
 import com.keshav.daptap.namedrop.NameDropServer
 import java.io.IOException
 import java.net.BindException
@@ -56,7 +57,12 @@ class DirectLink(
     private fun apply(network: Network): String {
         val s = socket?.takeUnless { it.isClosed } ?: return "will bind when the server opens its socket"
         return runCatching {
-            network.bindSocket(s)
+            // Not network.bindSocket(s): that calls the socket's synchronized getReuseAddress(), and Android holds the
+            // socket's lock while kwik's receiver is blocked in receive(), so the bind would wait for the iPhone's next
+            // packet (the helper's hang in 6c58ebf). A duplicate of the descriptor is the same kernel socket, so tying
+            // it to the network ties ours, and taking it doesn't need the lock.
+            val pfd = ParcelFileDescriptor.fromDatagramSocket(s) ?: throw IOException("socket has no descriptor")
+            pfd.use { network.bindSocket(it.fileDescriptor) }
             "bound directly to network ${network.networkHandle} (interface index $linkIndex)"
         }.getOrElse { e ->
             val error = "${e.javaClass.simpleName}: ${e.message}"

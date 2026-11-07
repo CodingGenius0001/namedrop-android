@@ -64,6 +64,29 @@ class SimulatedReader : BroadcastReceiver() {
             Thread { Log.i("DapTapSim", "directlink: ${app.appleLink.listForRestrictedNetworks()}") }.start()
             return
         }
+        // --es directbindwait eth0: bind the direct socket while another thread is blocked in receive(), as kwik's
+        // receiver is during a tap. Passes if the bind returns at once; the old bindSocket(DatagramSocket) waited
+        // until a packet arrived (here, the wake-up packet after 3 s).
+        intent.getStringExtra("directbindwait")?.let { iface ->
+            val app = context.applicationContext as com.keshav.daptap.DapTapApp
+            Thread {
+                val network = com.keshav.daptap.namedrop.LinkRoute(context.applicationContext) {}.networkFor(iface)
+                if (network == null) { Log.i("DapTapSim", "directbindwait: no network for $iface"); return@Thread }
+                val socket = app.appleLink.direct.socket()
+                val receiver = Thread { runCatching { socket.receive(java.net.DatagramPacket(ByteArray(64), 64)) } }.apply { start() }
+                Thread.sleep(300) // let the receiver block
+                val waker = Thread {
+                    Thread.sleep(3_000)
+                    runCatching { java.net.DatagramSocket().use { it.send(java.net.DatagramPacket(byteArrayOf(0), 1, java.net.InetAddress.getLoopbackAddress(), socket.localPort)) } }
+                }.apply { start() }
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                val r = app.appleLink.direct.bind(iface, network)
+                val ms = android.os.SystemClock.elapsedRealtime() - t0
+                Log.i("DapTapSim", "directbindwait: ${if (ms < 1_000) "PASS" else "FAIL"} in $ms ms, receiver blocked=${receiver.isAlive}: $r")
+                waker.join(); receiver.join(1_000); socket.close()
+            }.start()
+            return
+        }
         // --es directsend eth0: the direct socket on that interface's network, sending to a stale interface index.
         intent.getStringExtra("directsend")?.let { iface ->
             val app = context.applicationContext as com.keshav.daptap.DapTapApp
