@@ -404,6 +404,12 @@ class TapEngine(
             mark("done")
             log("NameDrop: swap over ($why)")
             logTimeline()
+            // Say so when it failed, instead of DapTap just coming back as if nothing happened.
+            when (why) {
+                "the Apple link never came up", "the iPhone never connected" ->
+                    _events.tryEmit("The iPhone couldn't reach this phone. Try the tap again.")
+                "timed out waiting for the iPhone's Share" -> _events.tryEmit("The iPhone didn't tap Share in time.")
+            }
             if (prefs.settings.value.testingMode) launch(kotlinx.coroutines.Dispatchers.IO) { swapDiagnostics?.invoke()?.let(::log) }
             if (swapCovered) {
                 // DapTap comes forward under the cover; the cover goes once DapTap has drawn (see onAppShown),
@@ -508,9 +514,17 @@ class TapEngine(
         // Mid-NameDrop (including after Quick Share has taken the screen and the beacon has stopped), the iPhone
         // retries a tag read; it must keep being turned away, as 1.0.32 did.
         if (now - nameDropStartedAt < 10_000 || appleLinkStartedAt != 0L) return true
-        if (beaconEnabled && now - lastAppleFrameAt < 3_000) return true
-        return beaconActive && !framesReliable
+        val maybeIphone = (beaconEnabled && now - lastAppleFrameAt < 3_000) || (beaconActive && !framesReliable)
+        if (!maybeIphone) return false
+        // A reader that keeps asking without starting NameDrop is an Android phone without DapTap: serve it.
+        if (refusals.refuse(now)) return true
+        if (now - foreignReaderServedAt > 6_000) later { log("a reader kept asking for the tag without starting NameDrop (an Android phone without DapTap): giving it our card") }
+        foreignReaderServedAt = now
+        return false
     }
+    private val refusals = RefusalCap()
+    /** When a reader was last served after being turned away: an Android phone without DapTap, not an iPhone. */
+    @Volatile private var foreignReaderServedAt = -1_000_000L
 
     fun onNdefRefused() {
         val now = SystemClock.elapsedRealtime()
@@ -527,6 +541,7 @@ class TapEngine(
         val now = SystemClock.elapsedRealtime()
         when (event) {
             com.keshav.daptap.core.SnapApplet.Event.BOOP_SELECTED -> {
+                refusals.reset()
                 val fresh = now - nameDropStartedAt > 10_000
                 nameDropStartedAt = now
                 lastAppleFrameAt = now
@@ -665,7 +680,9 @@ class TapEngine(
     private suspend fun decide(readAt: Long, served: Relay.Session) {
         val settings = prefs.settings.value
         val appleSeen = readAt - lastAppleFrameAt < 3_000
-        if (!appleSeen) {
+        // An Android phone without DapTap that read our tag (see refuseNdef): it has the card, nothing else to do.
+        val tagReader = { foreignReaderServedAt >= touchStartedAt - 1_000 }
+        if (!appleSeen && !tagReader()) {
             // Two DapTap phones read each other at the same time; give ours a moment to land.
             withTimeoutOrNull(PEER_WINDOW_MS) {
                 while (lastPeerTagAt < touchStartedAt - 1_000) delay(50)
@@ -673,18 +690,21 @@ class TapEngine(
         }
         val peer = when {
             lastPeerTagAt >= touchStartedAt - 1_000 -> Peer.ANDROID
+            tagReader() -> Peer.UNKNOWN
             appleSeen -> Peer.IPHONE
             else -> Peer.UNKNOWN
         }
-        log("decided peer=$peer (apple frames: $appleSeen)")
+        log("decided peer=$peer (apple frames: $appleSeen${if (tagReader()) ", Android phone without DapTap" else ""})")
         var nameDropEngaged = false
         if (peer == Peer.IPHONE && beaconEnabled) {
             // The iPhone runs NameDrop with us next. Anything that takes the screen now (Quick Share) would stop
             // the beacon and the card, so wait for the handshake first.
             val started = withTimeoutOrNull(NAMEDROP_START_WAIT_MS) {
-                while (nameDropStartedAt < touchStartedAt - 1_000) delay(50)
-            } != null
-            if (started) {
+                while (nameDropStartedAt < touchStartedAt - 1_000 && !tagReader()) delay(50)
+            } != null && !tagReader()
+            if (tagReader()) {
+                // Not an iPhone after all: logged below.
+            } else if (started) {
                 nameDropEngaged = true
                 withTimeoutOrNull(NAMEDROP_FINISH_WAIT_MS) { while (nameDropDoneAt < nameDropStartedAt - 1_000) delay(50) }
                 val done = nameDropDoneAt >= nameDropStartedAt - 1_000
@@ -695,12 +715,14 @@ class TapEngine(
         }
         // Without the web card, the only reply that can come over the relay is a DapTap phone whose card
         // didn't make it back during the touch ("Send mine back"). Only then is it worth a connection.
-        if (!settings.webFallback && peer != Peer.IPHONE && lastPushAt < touchStartedAt) listen(served, SWAP_LISTEN_MS)
+        val plainAndroid = tagReader()
+        if (plainAndroid) log("an Android phone without DapTap read our card")
+        if (!settings.webFallback && peer != Peer.IPHONE && !plainAndroid && lastPushAt < touchStartedAt) listen(served, SWAP_LISTEN_MS)
         var airDrop = false
         // Once the iPhone has taken up NameDrop, an AirDrop request on top of it is exactly what NameDrop is
         // meant to replace, so it is never opened automatically then (the card screen still offers it).
         if (nameDropEngaged) log("NameDrop in progress: not opening Quick Share")
-        if (peer != Peer.ANDROID && settings.airDropOnTap && !nameDropEngaged) {
+        if (peer != Peer.ANDROID && settings.airDropOnTap && !nameDropEngaged && !plainAndroid) {
             val card = prefs.card.value
             // A failed handoff must never take the app down mid-tap: log it and carry on.
             airDrop = runCatching { feedback.launchQuickShare(card, Photos.readMine(context)) }
@@ -709,7 +731,7 @@ class TapEngine(
             log(if (airDrop) "opened Quick Share with vCard" else "could not open Quick Share")
             if (airDrop && settings.autoPickIphone) AutoPick.arm()
         }
-        val phase = Phase.Sent(peer, airDrop, SystemClock.elapsedRealtime())
+        val phase = Phase.Sent(if (plainAndroid) Peer.UNKNOWN else peer, airDrop, SystemClock.elapsedRealtime())
         _phase.value = phase
         feedback.sent(peer)
         if (!feedback.appInForeground() && settings.overlay) feedback.showOverlay(phase)

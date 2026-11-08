@@ -257,7 +257,7 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
      * from an older DapTap. [notify] gets what the user must do when DapTap can't fix it itself, or null. Once DapTap
      * can send on the link itself, all of that stops: it leaves debugging alone and nothing needs restarting.
      */
-    suspend fun supervise(busy: () -> Boolean, notify: (String?) -> Unit) = withContext(Dispatchers.IO) {
+    suspend fun supervise(busy: () -> Boolean, idle: () -> Boolean = { false }, notify: (String?) -> Unit) = withContext(Dispatchers.IO) {
         if (!supported) return@withContext
         var wasUp: Boolean? = null
         var failures = 0
@@ -278,7 +278,8 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                     if (helper.ping(300) != null) { helper.stop(); onHelperUp() }
                 }
                 tell(null)
-                kotlinx.coroutines.withTimeoutOrNull(5_000L) { pokes.receive() }
+                // Nothing here can stop working by itself; a poke (DapTap opened, a setting changed) checks at once.
+                kotlinx.coroutines.withTimeoutOrNull(DIRECT_CHECK_MS) { pokes.receive() }
                 continue
             }
             usingDirect = false
@@ -309,8 +310,9 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
                 }
             }
             wasUp = up || helper.ping(300) != null
-            // A poke (DapTap opened) retries at once, even inside the backoff.
-            if (kotlinx.coroutines.withTimeoutOrNull(if (wasUp == true) 5_000L else 3_000L) { pokes.receive() } != null) nextTry = 0
+            // A poke (DapTap opened) retries at once, even inside the backoff. In the background it looks far less often.
+            val wait = if (idle()) IDLE_CHECK_MS else if (wasUp == true) 5_000L else 3_000L
+            if (kotlinx.coroutines.withTimeoutOrNull(wait) { pokes.receive() } != null) nextTry = 0
         }
     }
 
@@ -344,6 +346,10 @@ class AppleLink(private val context: Context, private val log: (String) -> Unit,
         const val RESTRICTED_NETWORK_UIDS = "uids_allowed_on_restricted_networks"
         /** Waits between failed restarts: 15 s, 30 s, 1 min, 2 min, then every 5 min (a poke retries at once). */
         private val BACKOFF_MS = longArrayOf(15_000, 30_000, 60_000, 120_000, 300_000)
+        /** Sending directly: how often to re-check the restricted-network list when nothing pokes. */
+        private const val DIRECT_CHECK_MS = 10 * 60_000L
+        /** The helper path, with DapTap in the background: how often to check on the helper. */
+        private const val IDLE_CHECK_MS = 60_000L
         const val HELPER_NAME = "daptap-link"
         fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     }

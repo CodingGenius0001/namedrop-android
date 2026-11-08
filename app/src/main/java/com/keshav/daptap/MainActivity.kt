@@ -60,8 +60,6 @@ class MainActivity : ComponentActivity() {
                 android.view.Choreographer.getInstance().postFrameCallback { app.engine.onAppShown() }
             }
         }
-        // A process started in the background (an NFC tap) can't start the testing service; the app can.
-        if (app.prefs.settings.value.testingMode) com.keshav.daptap.diag.TestingService.set(this, true)
         // Coming back from "Install unknown apps" continues an update; release builds also look for a newer
         // DapTap (once per launch, then at most every six hours). Debug builds are a different app id.
         lifecycleScope.launch {

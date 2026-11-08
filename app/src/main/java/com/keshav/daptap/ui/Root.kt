@@ -250,6 +250,8 @@ fun DapTapRoot(app: DapTapApp) {
     // The iPhone link that lets NameDrop finish on this phone.
     val link by app.appleLink.state.collectAsState()
     LaunchedEffect(resumeTick) { app.appleLink.refresh() }
+    // Sending directly needs neither debugging nor Auto Blocker off; the helper needs both.
+    val direct = remember(link, resumeTick) { app.appleLink.isDirect }
     fun setUpIphoneLink() {
         // The pairing code is typed into a notification, so ask for notifications first; the guide does the rest.
         if (Build.VERSION.SDK_INT >= 33 && !status.notificationsAllowed) requestNotifications()
@@ -266,7 +268,8 @@ fun DapTapRoot(app: DapTapApp) {
         com.keshav.daptap.applink.AppleLink.Phase.OFF ->
             "Off. NameDrop can't finish with iPhones on this phone." to ("Turn on" to { scope.launch { app.appleLink.setEnabled(true) }; Unit })
         com.keshav.daptap.applink.AppleLink.Phase.RUNNING ->
-            "On. iPhones can finish NameDrop with this phone." to ("Turn off" to { scope.launch { app.appleLink.setEnabled(false) }; Unit })
+            (if (direct) "On. Works without Wi-Fi or debugging, and with Auto Blocker on."
+            else "On, through Wireless debugging. Needs Auto Blocker off.") to ("Turn off" to { scope.launch { app.appleLink.setEnabled(false) }; Unit })
     }
 
     DapTapTheme(Grounds.of(card.label)) {

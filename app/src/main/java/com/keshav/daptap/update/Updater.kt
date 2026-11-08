@@ -224,6 +224,10 @@ class Updater(
                         PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE ->
                             "This build can't replace the DapTap you have (it was signed differently). Install it once from the website."
                         PackageInstaller.STATUS_FAILURE_STORAGE -> "Not enough storage to install the update."
+                        PackageInstaller.STATUS_FAILURE_BLOCKED ->
+                            if (android.os.Build.MANUFACTURER.equals("samsung", ignoreCase = true))
+                                "Auto Blocker stopped the update. Turn it off in Settings › Security and privacy › Auto Blocker, update, then turn it back on."
+                            else "Android blocked the update." + if (detail.isNotBlank()) " ($detail)" else ""
                         else -> "The update didn't install." + if (detail.isNotBlank()) " ($detail)" else ""
                     },
                     release,

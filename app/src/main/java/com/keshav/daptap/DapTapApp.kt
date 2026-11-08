@@ -27,6 +27,13 @@ class DapTapApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     @Volatile var startedActivities = 0; private set
+    /**
+     * DapTap is on screen or a swap is running. Diagnostics and the link supervisor only work hard then; the rest
+     * of the time DapTap sleeps (no foreground service, no polling), and Android can freeze it.
+     */
+    private val awake = kotlinx.coroutines.flow.MutableStateFlow(false)
+    @Volatile private var swapping = false
+    private fun updateAwake() { awake.value = startedActivities > 0 || swapping }
     @Volatile private var currentPeerNetwork: android.net.Network? = null
     @Volatile private var currentPeerIface: String? = null
     /** The iPhone has finished its handshake on the current link (repeat binds stop; see bindHelper). */
@@ -88,8 +95,14 @@ class DapTapApp : Application() {
                 synchronized(linkSamples) { linkSamples.toList() }.takeIf { it.isNotEmpty() }?.let { "iPhone link kernel (per second): ${it.joinToString(" · ")}" },
             ).joinToString("\n").ifEmpty { null } else null
         }
+        var swapLinger: kotlinx.coroutines.Job? = null
         engine.onSwapActive = { on ->
-            com.keshav.daptap.tap.SwapService.set(this, on)
+            swapping = on
+            updateAwake()
+            swapLinger?.cancel()
+            // In testing mode the swap's service stays a little longer, so the log uploads before Android freezes us.
+            if (on || !prefs.settings.value.testingMode) com.keshav.daptap.tap.SwapService.set(this, on)
+            else swapLinger = scope.launch { kotlinx.coroutines.delay(LOG_UPLOAD_GRACE_MS); com.keshav.daptap.tap.SwapService.set(this@DapTapApp, false) }
             linkSampler?.cancel()
             wifiWatch?.cancel()
             if (!on && leftWifi) {
@@ -200,11 +213,12 @@ class DapTapApp : Application() {
         // (replacing an older one), or something switching debugging off; never in the middle of a swap.
         scope.launch {
             appleLink.refresh()
-            appleLink.supervise(busy = { currentPeerNetwork != null }) { problem ->
+            appleLink.supervise(busy = { currentPeerNetwork != null }, idle = { !awake.value }) { problem ->
                 if (problem != null) Notifications.linkProblem(this@DapTapApp, problem) else Notifications.cancelLinkProblem(this@DapTapApp)
             }
         }
-        // Testing mode: log interface changes, and probe what can be sent on a new Apple link (once per link).
+        // Testing mode, while DapTap is open or swapping: log interface changes, and probe what can be sent on a new
+        // Apple link (once per link).
         var probed: String? = null
         com.keshav.daptap.diag.InterfaceWatch(engine::log,
             onUp = { ni ->
@@ -223,9 +237,10 @@ class DapTapApp : Application() {
             onGone = { name ->
                 if (com.keshav.daptap.diag.PeerLink.isPeerLink(name)) { probed = null; peerLink.down(); scope.launch { engine.keepProbe(false) } }
             },
-        ).start(scope, prefs.settings.map { it.testingMode })
-        scope.launch {
-            prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { com.keshav.daptap.diag.TestingService.set(this@DapTapApp, it) }
+        ).start(scope, kotlinx.coroutines.flow.combine(prefs.settings.map { it.testingMode }, awake) { t, a -> t && a }.distinctUntilChanged())
+        scope.launch(Dispatchers.IO) {
+            // Testing mode: which of the phone's settings could be Samsung's Auto Blocker, so DapTap can learn to read it.
+            if (prefs.settings.value.testingMode) engine.log("settings that may be Auto Blocker: ${com.keshav.daptap.diag.SettingsProbe.find(this@DapTapApp)}")
         }
         scope.launch(Dispatchers.IO) {
             val others = com.keshav.daptap.nfc.NfcRouting.otherNdefClaimants(this@DapTapApp)
@@ -239,8 +254,8 @@ class DapTapApp : Application() {
             }
         }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
-            override fun onActivityStarted(activity: Activity) { startedActivities++ }
-            override fun onActivityStopped(activity: Activity) { startedActivities = (startedActivities - 1).coerceAtLeast(0) }
+            override fun onActivityStarted(activity: Activity) { startedActivities++; updateAwake() }
+            override fun onActivityStopped(activity: Activity) { startedActivities = (startedActivities - 1).coerceAtLeast(0); updateAwake() }
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
             override fun onActivityResumed(activity: Activity) {}
             override fun onActivityPaused(activity: Activity) {}
@@ -338,6 +353,9 @@ class DapTapApp : Application() {
 
         /** Gaps between the repeat binds after an Apple link appears: at +150, +400, +900, +1900 and +3400 ms. */
         private val REBIND_GAPS_MS = longArrayOf(150, 250, 500, 1_000, 1_500)
+
+        /** Testing mode: how long the swap's foreground service outlives the swap, so the log gets uploaded. */
+        private const val LOG_UPLOAD_GRACE_MS = 20_000L
 
         /** How long after the Apple link appears Samsung gets to drop Wi-Fi by itself. */
         private const val WIFI_GRACE_MS = 800L

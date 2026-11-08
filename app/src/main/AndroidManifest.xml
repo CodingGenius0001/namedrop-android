@@ -113,15 +113,6 @@
         </activity>
 
         <service
-            android:name=".diag.TestingService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Developer testing mode: uploads the encrypted NFC debug log while other apps are open" />
-        </service>
-
-        <service
             android:name=".tap.SwapService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
