@@ -144,11 +144,26 @@ class MainActivity : ComponentActivity() {
                 // from an iPhone's). Read it ourselves: DapTap's reader says hello first, so it's let in.
                 @Suppress("DEPRECATION")
                 val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
-                if (tag == null || IsoDep.get(tag) == null) { app.engine.log("read a tag that isn't a contact card"); return }
+                if (tag == null) { app.engine.log("read a tag that isn't a contact card (no tag details)"); return }
+                if (IsoDep.get(tag) == null) { app.engine.onForeignTag(describe(tag)); return }
                 lifecycleScope.launch { readDapTap(tag) }
             }
         }
     }
+
+    /** What a tag looked like, for testing logs: its techs, NFC-A ATQA/SAK, UID length and ISO-DEP bytes. */
+    private fun describe(tag: Tag): String = runCatching {
+        fun hex(b: ByteArray?) = b?.joinToString("") { "%02X".format(it) }?.ifEmpty { "-" } ?: "-"
+        val techs = tag.techList.joinToString("+") { it.substringAfterLast('.') }
+        val a = android.nfc.tech.NfcA.get(tag)
+        val iso = IsoDep.get(tag)
+        buildString {
+            append(techs)
+            append(" uid ${tag.id?.size ?: 0} B")
+            if (a != null) append(" atqa ${hex(a.atqa)} sak %02X".format(a.sak.toInt() and 0xFF))
+            if (iso != null) append(" hist ${hex(iso.historicalBytes)} hilayer ${hex(iso.hiLayerResponse)}")
+        }
+    }.getOrElse { "undescribed: ${it.javaClass.simpleName}" }
 
     private suspend fun readDapTap(tag: Tag) {
         val iso = IsoDep.get(tag) ?: return
@@ -161,7 +176,7 @@ class MainActivity : ComponentActivity() {
         }
         if (payload == null) {
             runCatching { iso.close() }
-            app.engine.log("read a tag that isn't a contact card")
+            app.engine.onForeignTag(describe(tag))
             return
         }
         app.engine.receivePayload(payload, "tap")

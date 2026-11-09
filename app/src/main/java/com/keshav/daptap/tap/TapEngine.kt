@@ -498,7 +498,9 @@ class TapEngine(
         val peer = now - maxOf(lastPeerTagAt, lastPushAt) < 2_500
         val handshake = nameDropStartedAt > nameDropDoneAt && now - nameDropStartedAt < 3_000
         val justDone = now - maxOf(nameDropDoneAt, appleLinkFinishedAt) < 5_000
-        return peer || handshake || justDone
+        // An Android phone without DapTap is here (or reading us): a burst would switch our card off mid-read.
+        val android = now - maxOf(foreignTagAt, foreignReaderServedAt) < ANDROID_HOLD_MS
+        return peer || handshake || justDone || android
     }
 
     /**
@@ -516,12 +518,36 @@ class TapEngine(
         if (now - nameDropStartedAt < 10_000 || appleLinkStartedAt != 0L) return true
         val maybeIphone = (beaconEnabled && now - lastAppleFrameAt < 3_000) || (beaconActive && !framesReliable)
         if (!maybeIphone) return false
+        // Our own poll just read this phone's tag: iPhones never answer a plain poll, Android phones do. Serve it
+        // on its first try.
+        val androidSeen = now - foreignTagAt < ANDROID_SEEN_MS
         // A reader that keeps asking without starting NameDrop is an Android phone without DapTap: serve it.
-        if (refusals.refuse(now)) return true
-        if (now - foreignReaderServedAt > 6_000) later { log("a reader kept asking for the tag without starting NameDrop (an Android phone without DapTap): giving it our card") }
+        if (!androidSeen && refusals.refuse(now)) return true
+        if (now - foreignReaderServedAt > 6_000) later {
+            log(if (androidSeen) "an Android phone without DapTap is reading us (we read its tag first): giving it our card"
+                else "a reader kept asking for the tag without starting NameDrop (an Android phone without DapTap): giving it our card")
+        }
         foreignReaderServedAt = now
         return false
     }
+
+    /**
+     * DapTap's own NFC poll (the activity's tag dispatch, between beacon bursts) read a tag with no DapTap or
+     * contact card on it. That's an Android phone's card emulation, or a bank card or badge; an iPhone only
+     * answers our NameDrop frame, never a plain poll (no logged iPhone tap ever showed one). [detail] describes
+     * the tag, so a later log can tell phones from cards.
+     */
+    fun onForeignTag(detail: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - nameDropStartedAt < 10_000 || appleLinkStartedAt != 0L) {
+            log("read a tag that isn't a contact card ($detail), during NameDrop")
+            return
+        }
+        foreignTagAt = now
+        log("read a tag that isn't a contact card ($detail): likely an Android phone, so its next read of us gets our card")
+    }
+    /** When DapTap's own poll last read a non-DapTap tag (see [onForeignTag]). */
+    @Volatile private var foreignTagAt = -1_000_000L
     private val refusals = RefusalCap()
     /** When a reader was last served after being turned away: an Android phone without DapTap, not an iPhone. */
     @Volatile private var foreignReaderServedAt = -1_000_000L
@@ -893,6 +919,10 @@ class TapEngine(
         /** How long to wait for another DapTap phone's card before assuming an iPhone. Covers a cold start of
          *  DapTap on the other phone, which reads us through Android's tag dispatch and then pushes back. */
         const val PEER_WINDOW_MS = 2_000L
+        /** How long after our poll read an Android phone's tag its read of us is served at once. */
+        const val ANDROID_SEEN_MS = 8_000L
+        /** No NameDrop frame this long after an Android phone without DapTap showed up or read us. */
+        const val ANDROID_HOLD_MS = 3_000L
         /** After an iPhone shows up, how long to wait for it to start NameDrop (it may need a few beacon cycles). */
         const val NAMEDROP_START_WAIT_MS = 5_000L
         const val NAMEDROP_FINISH_WAIT_MS = 10_000L
