@@ -197,24 +197,40 @@ class NameDropServer(
         }
 
         private fun request(stream: QuicStream) {
-            val input = stream.inputStream
+            val progress = Progress()
+            val input = Counting(stream.inputStream, progress)
             var headers: List<Map.Entry<String, String>> = emptyList()
             val body = ByteArrayOutputStream()
-            while (true) {
-                val type = readVarint(input) ?: break
-                val len = readVarint(input) ?: break
-                if (len > MAX_FRAME) error("frame of $len bytes")
-                val payload = readFully(input, len.toInt())
-                when (type) {
-                    0x01L -> {
-                        headers = decoder.decodeStream(ByteArrayInputStream(payload))
-                        runCatching { onRequest(headers.firstOrNull { it.key == ":path" }?.value ?: "?") }
-                        // When the request started (vs. when it was all in): splits the iPhone's prep from the upload.
-                        if (verbose()) log("NameDrop exchange: ${headers.firstOrNull { it.key == ":path" }?.value ?: "?"} started")
+            try {
+                while (true) {
+                    val type = readVarint(input) ?: break
+                    val len = readVarint(input) ?: break
+                    if (len > MAX_FRAME) error("frame of $len bytes")
+                    // Noted before the payload is read: a frame that was announced and then stalled shows as such.
+                    progress.frames++
+                    progress.frame = "type $type, $len B"
+                    if (verbose() && type != 0x01L && progress.frames <= MAX_FRAME_LINES) log("NameDrop exchange: ${progress.path} frame ${progress.frame}")
+                    val payload = readFully(input, len.toInt())
+                    when (type) {
+                        0x01L -> {
+                            headers = decoder.decodeStream(ByteArrayInputStream(payload))
+                            val path = headers.firstOrNull { it.key == ":path" }?.value ?: "?"
+                            progress.path = path
+                            runCatching { onRequest(path) }
+                            // When the request started (vs. when it was all in): splits the iPhone's prep from the upload.
+                            // The headers say whether the iPhone already knows its body's size (content-length), which
+                            // it can't if it is still waiting for Share or Receive Only.
+                            if (verbose()) {
+                                log("NameDrop exchange: $path started (${headers.joinToString(", ") { "${it.key}=${it.value.take(80)}" }})")
+                                workers.execute { watch(progress) }
+                            }
+                        }
+                        0x00L -> body.write(payload)
+                        else -> Unit // reserved / unknown frame types are ignored (RFC 9114 9)
                     }
-                    0x00L -> body.write(payload)
-                    else -> Unit // reserved / unknown frame types are ignored (RFC 9114 9)
                 }
+            } finally {
+                progress.done = true
             }
             val method = headers.firstOrNull { it.key == ":method" }?.value
             val path = headers.firstOrNull { it.key == ":path" }?.value
@@ -234,6 +250,19 @@ class NameDropServer(
             out.close()
             log("NameDrop exchange: answered $path with ${resp.status} (${resp.body.size} B)")
             if (resp.closeAfter) { answeredExchange = true; workers.execute { closeWhenDelivered(sentBefore, resp.body.size) } }
+        }
+
+        /** Testing mode: while a request's body hasn't arrived, say every few seconds how far it got. */
+        private fun watch(p: Progress) {
+            var lines = 0
+            while (!p.done && !finished && lines < MAX_WAIT_LINES) {
+                runCatching { Thread.sleep(WAIT_LOG_MS) }
+                if (p.done || finished) return
+                lines++
+                val idle = (System.nanoTime() - p.lastAt) / 1_000_000
+                log("NameDrop exchange: ${p.path} still open after ${(System.nanoTime() - p.startedAt) / 1_000_000_000} s: " +
+                    "${p.bytes} B in, ${p.frames} frames (last: ${p.frame}), nothing for $idle ms · ${stats()}")
+            }
         }
 
         /**
@@ -282,6 +311,23 @@ class NameDropServer(
         }.getOrDefault("no stats")
     }
 
+    /** How far one request has got, for the testing-mode wait log. */
+    private class Progress {
+        val startedAt = System.nanoTime()
+        @Volatile var path = "?"
+        @Volatile var bytes = 0L
+        @Volatile var frames = 0
+        @Volatile var frame = "none"
+        @Volatile var lastAt = System.nanoTime()
+        @Volatile var done = false
+    }
+
+    private class Counting(private val src: InputStream, private val p: Progress) : InputStream() {
+        override fun read(): Int = src.read().also { if (it >= 0) { p.bytes++; p.lastAt = System.nanoTime() } }
+        override fun read(b: ByteArray, off: Int, len: Int): Int =
+            src.read(b, off, len).also { if (it > 0) { p.bytes += it; p.lastAt = System.nanoTime() } }
+    }
+
     /** Our own socket on the NameDrop port when there's no iPhone link: sends that fail don't stop the server. */
     private class PlainSocket(private val log: (String) -> Unit) : DatagramSocket(null as java.net.SocketAddress?) {
         @Volatile private var failures = 0
@@ -319,6 +365,10 @@ class NameDropServer(
         private const val CLOSE_MIN_MS = 200L
         private const val CLOSE_MAX_MS = 3_000L
         private const val MAX_LINES = 400
+        /** Testing mode: how often an unfinished request is reported, and how many times and frames at most. */
+        private const val WAIT_LOG_MS = 5_000L
+        private const val MAX_WAIT_LINES = 20
+        private const val MAX_FRAME_LINES = 12
         @Volatile private var xdhLogged = false
         @Volatile private var warmed = false
 
