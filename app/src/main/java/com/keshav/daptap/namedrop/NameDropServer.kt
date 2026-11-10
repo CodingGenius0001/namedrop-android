@@ -191,9 +191,26 @@ class NameDropServer(
             }
         }
 
+        /**
+         * The iPhone's one-way streams (control, QPACK) carry nothing the exchange needs, but in testing mode what
+         * arrives on them is logged: a GOAWAY or a late SETTINGS is the kind of thing a stalled request hides.
+         */
         private fun drain(input: InputStream) {
             val buf = ByteArray(4096)
-            runCatching { while (input.read(buf) >= 0) Unit }
+            var total = 0L
+            var lines = 0
+            runCatching {
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    if (n > 0 && verbose() && lines++ < MAX_STREAM_LINES) {
+                        val hex = buf.take(minOf(n, 48)).joinToString("") { "%02X".format(it) }
+                        log("NameDrop h3: one-way stream ${if (total == 0L) "opened, type ${buf[0].toInt() and 0xFF}" else "at $total B"}: $n B $hex${if (n > 48) "…" else ""}")
+                    }
+                    total += n
+                }
+            }
+            if (verbose()) log("NameDrop h3: one-way stream ended after $total B")
         }
 
         private fun request(stream: QuicStream) {
@@ -345,10 +362,18 @@ class NameDropServer(
     /** kwik's own log: warnings always; in testing mode also loss recovery (retransmits, PTOs), capped. */
     private class KwikLog(private val out: (String) -> Unit, verbose: Boolean) : BaseLogger() {
         private var lines = 0
-        init { logWarning(true); logInfo(false); if (verbose) logRecovery(true) }
+        private var skipping = false
+        // Packets are logged as their frame lists (no payloads): what the iPhone sends while a request hangs
+        // (a blocked-on-credit frame, a reset, a new stream) shows nowhere else.
+        init { logWarning(true); logInfo(false); if (verbose) { logRecovery(true); logPackets(true); logFlowControl(true) } }
         override fun log(message: String) {
             // Timer bookkeeping comes with every packet; only losses, probes and warnings say anything.
             if (message.contains("loss detection timer")) return
+            // A card upload is thousands of data and ack packets: past the first few hundred lines, skip those.
+            if (lines >= BULK_LINES && (message.contains("StreamFrame") || message.contains("AckFrame"))) {
+                if (!skipping) { skipping = true; out("kwik: (data and ack packets no longer logged)") }
+                return
+            }
             if (++lines <= MAX_LINES) out("kwik: $message".take(300)) else if (lines == MAX_LINES + 1) out("kwik: (more lines dropped)")
         }
         override fun log(message: String, ex: Throwable) { out("kwik: $message (${ex.javaClass.simpleName}: ${ex.message})".take(300)) }
@@ -364,7 +389,9 @@ class NameDropServer(
         /** After /Exchange, close no sooner than this, and no later than [CLOSE_MAX_MS] even if unacknowledged. */
         private const val CLOSE_MIN_MS = 200L
         private const val CLOSE_MAX_MS = 3_000L
-        private const val MAX_LINES = 400
+        private const val MAX_LINES = 700
+        private const val BULK_LINES = 300
+        private const val MAX_STREAM_LINES = 8
         /** Testing mode: how often an unfinished request is reported, and how many times and frames at most. */
         private const val WAIT_LOG_MS = 5_000L
         private const val MAX_WAIT_LINES = 20
