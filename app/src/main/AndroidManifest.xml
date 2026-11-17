@@ -5,11 +5,15 @@
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Reads whether Wi-Fi and Wi-Fi Aware (the Apple link) are on, for swaps that fail and the tap log. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <!-- Granted by DapTap's own Wireless debugging shell (pm grant), so it can switch Wireless debugging on
          to restart the iPhone link helper. Not grantable any other way. -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Testing mode: the log re-send job survives a reboot (LogRefreshJob). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Testing mode only: keeps the tap log uploading while another app is on screen. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -121,6 +125,10 @@
                 android:value="Keeps a few-second NFC contact swap with a nearby iPhone running while Quick Share is on screen" />
         </service>
 
+        <service
+            android:name=".diag.LogRefreshJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
             android:name=".applink.PairingService"
             android:exported="false"

@@ -52,12 +52,20 @@ class DapTapApp : Application() {
         Notifications.createChannels(this)
         updater = com.keshav.daptap.update.Updater(this, BuildConfig.WEB_BASE)
         reportLastCrash()
-        logUploader = com.keshav.daptap.diag.LogUploader(this, BuildConfig.RELAY_BASE, engine.log,
+        // Testing mode keeps the tap log on disk for 96 hours, so it outlives DapTap's process and ntfy's cache.
+        val logStore = com.keshav.daptap.diag.LogStore(filesDir)
+        engine.logSink = { line -> if (prefs.settings.value.testingMode) logStore.append(line) }
+        logUploader = com.keshav.daptap.diag.LogUploader(this, BuildConfig.RELAY_BASE, logStore, engine.log,
             prefs.settings.map { it.testingMode }) {
             "DapTap ${BuildConfig.VERSION_NAME} · ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})" +
                 " · NameDrop beacon supported: ${com.keshav.daptap.nfc.NameDropBeacon.isSupported(android.nfc.NfcAdapter.getDefaultAdapter(this))}" +
                 " · settings ${prefs.settings.value}"
         }.also { it.start(scope) }
+        scope.launch {
+            prefs.settings.map { it.testingMode }.distinctUntilChanged().collect { on ->
+                com.keshav.daptap.diag.LogRefreshJob.set(this@DapTapApp, on)
+            }
+        }
         appleLink = com.keshav.daptap.applink.AppleLink(this, engine::log) {
             // A new helper process has no network bound yet: bind it to a link that's already up.
             val network = currentPeerNetwork
@@ -88,6 +96,7 @@ class DapTapApp : Application() {
         val linkSamples = java.util.Collections.synchronizedList(mutableListOf<String>())
         var linkSampler: kotlinx.coroutines.Job? = null
         var wifiWatch: kotlinx.coroutines.Job? = null
+        var radioWatch: kotlinx.coroutines.Job? = null
         engine.swapDiagnostics = {
             if (appleLink.supported) listOfNotNull(
                 if (appleLink.isDirect) "iPhone link direct: ${appleLink.direct.stats()}" else appleLink.helper.stats()?.let { "iPhone link helper: $it" },
@@ -105,6 +114,20 @@ class DapTapApp : Application() {
             else swapLinger = scope.launch { kotlinx.coroutines.delay(LOG_UPLOAD_GRACE_MS); com.keshav.daptap.tap.SwapService.set(this@DapTapApp, false) }
             linkSampler?.cancel()
             wifiWatch?.cancel()
+            radioWatch?.cancel()
+            // Whether Wi-Fi is on or joined, and whether Wi-Fi Aware is available, decide whether the Apple link can
+            // come up at all: on record at both ends of every swap, and every change in between (testing mode).
+            scope.launch(Dispatchers.IO) { engine.log("radio at swap ${if (on) "start" else "end"}: ${com.keshav.daptap.diag.RadioState.snapshot(this@DapTapApp)}") }
+            if (on && prefs.settings.value.testingMode) radioWatch = scope.launch(Dispatchers.IO) {
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                var last: String? = null
+                while (true) {
+                    val now = com.keshav.daptap.diag.RadioState.brief(this@DapTapApp)
+                    if (now != last) engine.log("radio +${android.os.SystemClock.elapsedRealtime() - t0} ms: $now")
+                    last = now
+                    kotlinx.coroutines.delay(RADIO_SAMPLE_MS)
+                }
+            }
             if (!on && leftWifi) {
                 leftWifi = false
                 scope.launch(Dispatchers.IO) { engine.log("Wi-Fi: rejoining after the swap -> ${appleLink.helper.wifi(true) ?: "helper didn't answer"}") }
@@ -132,6 +155,7 @@ class DapTapApp : Application() {
             }
         }
         engine.onIphoneConnected = { iphoneConnected = true }
+        engine.wifiRadioOn = { com.keshav.daptap.diag.RadioState.wifiOn(this) }
         /**
          * Ties the NameDrop socket (DapTap's own, or the helper's) to the Apple link. A bind made the moment the link's network appears can
          * be too early: the bind succeeds, sends "succeed", and nothing reaches the iPhone. Every working swap had a
@@ -356,6 +380,9 @@ class DapTapApp : Application() {
 
         /** Testing mode: how long the swap's foreground service outlives the swap, so the log gets uploaded. */
         private const val LOG_UPLOAD_GRACE_MS = 20_000L
+
+        /** Testing mode: how often a swap samples the radios, logging only changes. */
+        private const val RADIO_SAMPLE_MS = 250L
 
         /** How long after the Apple link appears Samsung gets to drop Wi-Fi by itself. */
         private const val WIFI_GRACE_MS = 800L

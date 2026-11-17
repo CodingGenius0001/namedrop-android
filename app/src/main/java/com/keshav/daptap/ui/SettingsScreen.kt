@@ -152,7 +152,7 @@ fun SettingsScreen(
                 "Experimental. Puts NFC in observe mode between polls so the iPhone's reply frames show up in the log. Turn off if taps stop working.",
                 settings.observeFrames, enabled = status.observeModeSupported == true) { v -> actions.update { it.copy(observeFrames = v) } }
             Toggle("Testing mode",
-                "Sends the tap log, encrypted, after each tap, so whoever has the code below can read it remotely. Messages expire after about 12 hours.",
+                "Sends the tap log, encrypted, after each tap, so whoever has the code below can read it remotely. The phone keeps the last 96 hours and sends them again every few hours, so a test can be read for four days.",
                 settings.testingMode) { v -> actions.update { it.copy(testingMode = v) } }
             if (settings.testingMode) {
                 ListItem(

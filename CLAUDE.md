@@ -24,8 +24,11 @@ There is no lint task configured. `CrossLanguageTest` runs `web/test/xlang.mjs` 
 Read the log a phone uploaded in testing mode (the code is in *Settings › Diagnostics*; needs Python `cryptography`):
 
 ```sh
-python3 scripts/read-test-log.py '<testing code>'         # add --all for every upload still on the server
+python3 scripts/read-test-log.py '<testing code>'             # the last 96 hours, merged into one timeline
+python3 scripts/read-test-log.py '<testing code>' --hours 6   # only recent lines; --raw prints each upload as sent
 ```
+
+In testing mode the phone keeps the log on disk for 96 hours (`diag/LogStore`, numbered lines), uploads new lines after each burst of activity, and re-sends the whole 96 hours every ~9 hours (on app start, or `diag/LogRefreshJob` every 3 h) because ntfy.sh forgets messages after 12 hours. ntfy.sh also caps a visitor at 250 messages a day and bursts of 60; `LogUploader` paces itself and each upload's header counts the day's messages and names the last failed upload. Each swap logs `radio at swap start/end` (Wi-Fi switch, joined network, Wi-Fi Aware, location, default network) and, in testing mode, every radio change in between.
 
 ### Emulator
 
@@ -66,11 +69,11 @@ Paths are under `app/src/main/java/com/keshav/daptap/`. `DapTapApp.kt` wires eve
 - **Binding a socket:** `Network.bindSocket(DatagramSocket)` takes the socket's lock, and Android holds that lock while another thread is blocked in `receive()`, so the bind hangs until a packet arrives. Never call it on a socket kwik is receiving on. `LinkHelper` binds from its own receive thread; `DirectLink` binds a duplicate descriptor from `ParcelFileDescriptor.fromDatagramSocket`, which doesn't take the lock. `SimulatedReader --es directbindwait <iface>` checks this on a device.
 - **Repeat binds:** bind on link up, on the `REBIND_GAPS_MS` schedule and on the iPhone's first packet, and never deduplicate them. A bind made as the interface appears can silently not route. Stop rebinding once the iPhone connects: every failed 1.0.34–1.0.38 tap had a rebind land mid-exchange. That cause is likely but not proven.
 - **Threads:** HCE callbacks run on the main thread and `TapEngine`'s scope is `Main.immediate`, so never block it. Defer with `later {}` or `Dispatchers.Main`.
-- **Battery:** nothing runs in the background between taps. There is no always-on foreground service, even in testing mode: `SwapService` runs only during a swap, plus 20 s for the log upload in testing mode. Interface polling only runs while DapTap is open or swapping, and the supervisor slows down when idle. An earlier always-on testing service cost 6+ hours of background time a day.
+- **Battery:** nothing runs in the background between taps. There is no always-on foreground service, even in testing mode: `SwapService` runs only during a swap, plus 20 s for the log upload in testing mode. Interface polling only runs while DapTap is open or swapping, and the supervisor slows down when idle. The one exception is testing mode's `LogRefreshJob`, a brief wake every ~3 h that usually finds nothing due. An earlier always-on testing service cost 6+ hours of background time a day.
 - **Turning tag reads away:** the S26's chip never reports an iPhone's Apple frames, so while the beacon runs DapTap can't tell an iPhone from an Android phone without DapTap. `tap/RefusalCap` turns a reader away twice, over at least 2 s, then serves it. Android phones keep asking about once a second, but one 1.0.3x iPhone was refused at least twice over 3.5 s before NameDrop, so don't loosen the cap without iPhone logs. The faster signal: when the activity's own poll (between beacon bursts) reads an ISO-DEP tag that isn't DapTap, that's an Android phone's card emulation (no logged iPhone tap ever answered a plain poll), so `TapEngine.onForeignTag` lets that phone's next read through at once and holds the beacon for 3 s so a burst doesn't cut the read off.
 - **Interface index:** Samsung can rebuild `mosey0` mid-tap, which changes its index. kwik keeps the old scoped address, which is why `DirectLink` rewrites the destination.
 - **kwik:** `app/libs/kwik-0.10.3-daptap.jar` is kwik minus one class. `app/src/main/java/tech/kwik/` holds the patched `ServerConnectionCandidate` (LGPL-3.0) and an accessor. Never replace the jar with upstream.
-- **Wi-Fi:** never tell the user to turn Wi-Fi off; Wi-Fi Aware needs the radio on, even with no network joined.
+- **Wi-Fi:** never tell the user to turn Wi-Fi off; Wi-Fi Aware needs the radio on, even with no network joined. Swaps "off Wi-Fi" failed (iPhone stuck waiting) and their logs expired before anyone read them; the `radio` lines exist to say whether the Wi-Fi switch was off or the link failed with Wi-Fi on but not joined. A swap whose link never comes up with the switch off tells the user to turn Wi-Fi on.
 
 ## Working on this project
 

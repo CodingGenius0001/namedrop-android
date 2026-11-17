@@ -130,6 +130,8 @@ class TapEngine(
     @Volatile private var pendingAppleLinkAt = -1_000_000L
     /** Set by the app: whether the iPhone link helper can carry a swap right now (see AppleLink). */
     @Volatile var appleLinkReady: () -> Boolean = { false }
+    /** Set by the app: whether the Wi-Fi switch is on (null if unknown). The Apple link is Wi-Fi Aware. */
+    @Volatile var wifiRadioOn: () -> Boolean? = { null }
     /** Set by the app: try to start the iPhone link helper (it wasn't running when an iPhone tapped). */
     @Volatile var startAppleLink: () -> Unit = {}
     /** Set by the app: the link helper's counters, logged after each swap in testing mode (blocking; IO only). */
@@ -405,10 +407,13 @@ class TapEngine(
             log("NameDrop: swap over ($why)")
             logTimeline()
             // Say so when it failed, instead of DapTap just coming back as if nothing happened.
-            when (why) {
-                "the Apple link never came up", "the iPhone never connected" ->
+            val wifiOff = why == "the Apple link never came up" && runCatching { wifiRadioOn() }.getOrNull() == false
+            if (wifiOff) log("NameDrop: Wi-Fi is switched off, and the Apple link is Wi-Fi Aware")
+            when {
+                wifiOff -> _events.tryEmit("Wi-Fi is off. Turn it on to swap with iPhones (you don't need to join a network).")
+                why == "the Apple link never came up" || why == "the iPhone never connected" ->
                     _events.tryEmit("The iPhone couldn't reach this phone. Try the tap again.")
-                "timed out waiting for the iPhone's Share" -> _events.tryEmit("The iPhone didn't tap Share in time.")
+                why == "timed out waiting for the iPhone's Share" -> _events.tryEmit("The iPhone didn't tap Share in time.")
             }
             if (prefs.settings.value.testingMode) launch(kotlinx.coroutines.Dispatchers.IO) { swapDiagnostics?.invoke()?.let(::log) }
             if (swapCovered) {
@@ -906,7 +911,11 @@ class TapEngine(
     /** Thread-safe (kwik, h3 workers, binder and main threads all log). */
     private val timeFmt = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS", Locale.US)
 
+    /** Set by the app: also keeps each line on disk (testing mode; see LogStore). Called from any thread. */
+    @Volatile var logSink: ((String) -> Unit)? = null
+
     fun log(line: String) {
+        runCatching { logSink?.invoke(line) }
         val entry = java.time.LocalTime.now().format(timeFmt) + "  " + line
         _log.update { (it + entry).takeLast(LOG_MAX) }
         // Also to logcat (release too), so the tap log can be read over adb while testing with a real iPhone.
